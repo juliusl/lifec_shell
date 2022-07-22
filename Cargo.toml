@@ -1,0 +1,15 @@
+[package]
+name = "lifec_shell"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lifec = { git = "https://github.com/juliusl/lifec.git", branch = "main" }
+tokio = { version = "1.19.2", features = ["default", "rt-multi-thread", "sync", "fs", "process", "io-util", "io-std", "macros"] }
+wgpu_glyph = "0.17.0"
+terminal-keycode = "1.1.1"
+raw_tty = "0.1.0"
+imgui = "0.8.2"
+wgpu = "0.13.1"
