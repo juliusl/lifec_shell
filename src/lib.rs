@@ -16,17 +16,19 @@ pub struct Shell {
     /// byte sender
     byte_tx: Option<Sender<u8>>,
     /// char-limit
-    char_limit: u32,
+    char_limit: usize,
     /// char-count
-    char_count: u32,
-    /// buffer
-    buffer: Option<String>,
-    /// buffer
-    buf: [u8; 1],
+    char_count: usize,
     /// cursor
     cursor: usize,
     /// line number
     line: usize,
+    /// buffer
+    buf: [u8; 1],
+    /// character counts per line
+    line_info: Vec<usize>,
+    /// buffer
+    buffer: Option<String>,
 }
 
 impl Extension for Shell {
@@ -37,7 +39,7 @@ impl Extension for Shell {
     ) {
         match event {
             lifec::editor::WindowEvent::Resized(size) => {
-                self.char_limit = size.width / 16;
+                self.char_limit = (size.width / 16) as usize;
             }
             lifec::editor::WindowEvent::ReceivedCharacter(char) => {
                 if let Some(sender) = &self.byte_tx {
@@ -52,24 +54,52 @@ impl Extension for Shell {
                                 && !self.buffer.clone().unwrap_or_default().is_empty()
                             {
                                 self.cursor -= 1;
+
+                                if let Some(buffer) = &self.buffer {
+                                    let check = self.cursor + 1;
+                                    if let Some(b'\r') = buffer.as_bytes().get(check) {
+                                        self.line -= 1;
+                                    }
+                                }
                             }
                         }
                         winit::event::VirtualKeyCode::Right => {
                             if self.cursor < self.buffer.clone().unwrap_or_default().len() {
                                 self.cursor += 1;
+
+                                if let Some(buffer) = &self.buffer {
+                                    let check = self.cursor - 1;
+                                    if let Some(b'\r') = buffer.as_bytes().get(check) {
+                                        self.line += 1;
+                                    }
+                                }
                             }
                         }
                         winit::event::VirtualKeyCode::Down => {}
-                        winit::event::VirtualKeyCode::Up => {}
+                        winit::event::VirtualKeyCode::Up => {
+                            
+                        }
                         _ => {}
                     },
                     _ => {}
                 }
             }
             lifec::editor::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                self.char_limit = new_inner_size.width / 16;
+                self.char_limit = (new_inner_size.width / 16) as usize;
             }
             _ => {}
+        }
+
+        self.line_info = self
+            .buffer
+            .clone()
+            .unwrap_or_default()
+            .split('\r')
+            .map(|l| l.len())
+            .collect();
+
+        if let Some(count) = self.line_info.get(self.line) {
+            self.char_count = *count;
         }
     }
 
@@ -127,6 +157,7 @@ impl Extension for Shell {
             buf,
             cursor,
             line,
+            line_info,
         } = self
         {
             if let Some(next) = rx.try_recv().ok() {
@@ -135,25 +166,19 @@ impl Extension for Shell {
                 for keycode in decoder.write(next) {
                     if let Some(printable) = keycode.printable() {
                         buffer.insert(*cursor, printable);
-                        *char_count += 1;
                         *cursor += 1 as usize;
                     } else {
                         match keycode {
                             KeyCode::Backspace => {
-                                if *char_count > 0 {
-                                    *char_count -= 1;
-                                }
-
                                 if *cursor > 0 && !buffer.is_empty() {
                                     *cursor -= 1;
                                     match buffer.remove(*cursor) {
-                                        '\r' | '\n' => 
-                                        if *line > 0 {
-                                            *line -= 1;
+                                        '\r' | '\n' => {
+                                            if *line > 0 {
+                                                *line -= 1;
+                                            }
                                         }
-                                        _ => {
-
-                                        }
+                                        _ => {}
                                     }
                                 }
                             }
@@ -162,14 +187,12 @@ impl Extension for Shell {
                     }
 
                     if keycode == KeyCode::Enter {
-                        *char_count = 0;
                         *line += 1;
                     }
                 }
 
-                if *char_count > *char_limit {
+                if char_count > char_limit {
                     tx.try_send('\n' as u8).ok();
-                    *char_count = 0;
                     *line += 1;
                 }
             }
@@ -180,7 +203,7 @@ impl Extension for Shell {
                     bounds: (config.width as f32, config.height as f32),
                     text: vec![Text::new(
                         format!(
-                            "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={}",
+                            "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={} line_info={:?}",
                             keycode,
                             keycode.bytes(),
                             keycode.printable(),
@@ -188,6 +211,7 @@ impl Extension for Shell {
                             char_count,
                             cursor,
                             line,
+                            line_info,
                         )
                         .as_str(),
                     )
