@@ -31,6 +31,16 @@ pub struct Shell {
     buffer: Option<String>,
 }
 
+impl Shell {
+    pub fn get_current_line(&self) -> Option<String> {
+        if let Some(buffer) = &self.buffer {
+            buffer.split('\r').collect::<Vec<_>>().get(self.line).and_then(|l| Some(l.to_string()))
+        } else {
+            None 
+        }
+    }
+}
+
 impl Extension for Shell {
     fn on_window_event(
         &'_ mut self,
@@ -146,6 +156,7 @@ impl Extension for Shell {
         encoder: &mut wgpu::CommandEncoder,
         staging_belt: &mut wgpu::util::StagingBelt,
     ) {
+        let current_line = &self.get_current_line();
         if let Self {
             brush: Some(glyph_brush),
             decoder: Some(decoder),
@@ -203,7 +214,7 @@ impl Extension for Shell {
                     bounds: (config.width as f32, config.height as f32),
                     text: vec![Text::new(
                         format!(
-                            "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={} line_info={:?}",
+                            "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={} line_info={:?}\rcurrent_line={:?}",
                             keycode,
                             keycode.bytes(),
                             keycode.printable(),
@@ -212,6 +223,7 @@ impl Extension for Shell {
                             cursor,
                             line,
                             line_info,
+                            current_line,
                         )
                         .as_str(),
                     )
@@ -230,7 +242,7 @@ impl Extension for Shell {
             };
 
             glyph_brush.queue(Section {
-                screen_position: (30.0, 180.0),
+                screen_position: (30.0, 300.0),
                 bounds: (config.width as f32, config.height as f32),
                 text: {
                     vec![
@@ -247,7 +259,7 @@ impl Extension for Shell {
             });
 
             glyph_brush.queue(Section {
-                screen_position: (30.0, 180.0),
+                screen_position: (30.0, 300.0),
                 bounds: (config.width as f32, config.height as f32),
                 text: {
                     vec![
