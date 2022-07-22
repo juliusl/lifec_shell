@@ -16,10 +16,10 @@ impl App for Empty {
         "empty"
     }
 
-    fn edit_ui(&mut self, ui: &imgui::Ui) {
+    fn edit_ui(&mut self, _ui: &imgui::Ui) {
     }
 
-    fn display_ui(&self, ui: &imgui::Ui) {
+    fn display_ui(&self, _ui: &imgui::Ui) {
     }
 }
 
