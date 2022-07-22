@@ -16,6 +16,10 @@ impl App for Empty {
         "empty"
     }
 
+    fn enable_depth_stencil<'a>(&self) -> bool {
+        true
+    }
+
     fn edit_ui(&mut self, _ui: &imgui::Ui) {
     }
 

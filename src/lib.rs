@@ -1,13 +1,14 @@
 use lifec::Extension;
-use std::fmt::Write;
 use terminal_keycode::{Decoder, KeyCode};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use wgpu::DepthStencilState;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, Section, Text};
 
+/// Shell extension for the lifec runtime
 #[derive(Default)]
 pub struct Shell {
     /// glyph_brush, for rendering fonts
-    brush: Option<GlyphBrush<()>>,
+    brush: Option<GlyphBrush<DepthStencilState>>,
     /// terminal-keycode-decoder, use when connecting to remote processes
     decoder: Option<Decoder>,
     /// byte receiver
@@ -18,12 +19,14 @@ pub struct Shell {
     char_limit: u32,
     /// char-count
     char_count: u32,
-    /// line
-    line: Option<String>,
+    /// buffer
+    buffer: Option<String>,
     /// buffer
     buf: [u8; 1],
     /// cursor
     cursor: usize,
+    /// line number
+    line: usize,
 }
 
 impl Extension for Shell {
@@ -43,24 +46,24 @@ impl Extension for Shell {
             }
             lifec::editor::WindowEvent::KeyboardInput { input, .. } => {
                 match input.virtual_keycode {
-                    Some(key) => {
-                        match key {
-                            winit::event::VirtualKeyCode::Left => {
-                                if self.cursor > 1 {
-                                    self.cursor -= 1;
-                                }
-                            },
-                            winit::event::VirtualKeyCode::Right => {
-                                if self.cursor < self.line.clone().unwrap_or_default().len() {
-                                    self.cursor += 1;
-                                }
-                            },
-                            winit::event::VirtualKeyCode::Down => {},
-                            winit::event::VirtualKeyCode::Up => {},
-                            _ => {}
+                    Some(key) => match key {
+                        winit::event::VirtualKeyCode::Left => {
+                            if self.cursor > 1
+                                && !self.buffer.clone().unwrap_or_default().is_empty()
+                            {
+                                self.cursor -= 1;
+                            }
                         }
+                        winit::event::VirtualKeyCode::Right => {
+                            if self.cursor < self.buffer.clone().unwrap_or_default().len() {
+                                self.cursor += 1;
+                            }
+                        }
+                        winit::event::VirtualKeyCode::Down => {}
+                        winit::event::VirtualKeyCode::Up => {}
+                        _ => {}
                     },
-                    _ => {},
+                    _ => {}
                 }
             }
             lifec::editor::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
@@ -82,6 +85,13 @@ impl Extension for Shell {
             ab_glyph::FontArc::try_from_slice(include_bytes!("Inconsolata-Regular.ttf")).ok()
         {
             let glyph_brush = GlyphBrushBuilder::using_font(inconsolata)
+                .depth_stencil_state(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                })
                 .build(&device, wgpu::TextureFormat::Bgra8UnormSrgb);
 
             self.brush = Some(glyph_brush);
@@ -90,13 +100,14 @@ impl Extension for Shell {
             let (tx, rx) = channel::<u8>(100);
             self.byte_rx = Some(rx);
             self.byte_tx = Some(tx);
-            self.line = Some(String::default());
+            self.buffer = Some(String::default());
         }
     }
 
     fn on_render(
         &'_ mut self,
         view: &wgpu::TextureView,
+        depth_view: Option<&wgpu::TextureView>,
         _surface: &wgpu::Surface,
         config: &wgpu::SurfaceConfiguration,
         _adapter: &wgpu::Adapter,
@@ -112,32 +123,38 @@ impl Extension for Shell {
             byte_tx: Some(tx),
             char_limit,
             char_count,
-            line: Some(line),
+            buffer: Some(buffer),
             buf,
             cursor,
-         } = self
+            line,
+        } = self
         {
             if let Some(next) = rx.try_recv().ok() {
-                *char_count += 1;
-                *cursor += 1 as usize;
                 buf[0] = next;
 
                 for keycode in decoder.write(next) {
                     if let Some(printable) = keycode.printable() {
-                        match write!(line, "{}", printable) {
-                            Ok(_) => {}
-                            Err(_) => {}
-                        }
+                        buffer.insert(*cursor, printable);
+                        *char_count += 1;
+                        *cursor += 1 as usize;
                     } else {
                         match keycode {
                             KeyCode::Backspace => {
-                                line.pop();
-                                if *char_count > 1 {
-                                    *char_count -= 2;
+                                if *char_count > 0 {
+                                    *char_count -= 1;
                                 }
 
-                                if *cursor > 1 {
-                                    *cursor -= 2;
+                                if *cursor > 0 && !buffer.is_empty() {
+                                    *cursor -= 1;
+                                    match buffer.remove(*cursor) {
+                                        '\r' | '\n' => 
+                                        if *line > 0 {
+                                            *line -= 1;
+                                        }
+                                        _ => {
+
+                                        }
+                                    }
                                 }
                             }
                             _ => {}
@@ -146,12 +163,14 @@ impl Extension for Shell {
 
                     if keycode == KeyCode::Enter {
                         *char_count = 0;
+                        *line += 1;
                     }
                 }
 
                 if *char_count > *char_limit {
                     tx.try_send('\n' as u8).ok();
                     *char_count = 0;
+                    *line += 1;
                 }
             }
 
@@ -161,13 +180,14 @@ impl Extension for Shell {
                     bounds: (config.width as f32, config.height as f32),
                     text: vec![Text::new(
                         format!(
-                            "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={}",
+                            "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={}",
                             keycode,
                             keycode.bytes(),
                             keycode.printable(),
                             char_limit,
                             char_count,
                             cursor,
+                            line,
                         )
                         .as_str(),
                     )
@@ -176,7 +196,15 @@ impl Extension for Shell {
                     ..Section::default()
                 });
             }
-            
+
+            let cursor_tail = {
+                if *cursor > 1 {
+                    *cursor - 1
+                } else {
+                    0
+                }
+            };
+
             glyph_brush.queue(Section {
                 screen_position: (30.0, 180.0),
                 bounds: (config.width as f32, config.height as f32),
@@ -185,32 +213,76 @@ impl Extension for Shell {
                         Text::new("> ")
                             .with_color([1.0, 0.0, 0.0, 1.0])
                             .with_scale(40.0),
-                        Text::new(&line[..*cursor])
+                        Text::new(&buffer)
                             .with_color([1.0, 1.0, 1.0, 1.0])
+                            .with_scale(40.0)
+                            .with_z(0.9),
+                    ]
+                },
+                ..Section::default()
+            });
+
+            glyph_brush.queue(Section {
+                screen_position: (30.0, 180.0),
+                bounds: (config.width as f32, config.height as f32),
+                text: {
+                    vec![
+                        Text::new("> ")
+                            .with_color([1.0, 0.0, 0.0, 1.0])
                             .with_scale(40.0),
+                        Text::new({
+                            if !buffer.is_empty() {
+                                &buffer[..*cursor]
+                            } else {
+                                ""
+                            }
+                        })
+                        .with_color([1.0, 1.0, 1.0, 1.0])
+                        .with_scale(40.0)
+                        .with_z(-1.0),
                         Text::new("_")
                             .with_color([0.4, 0.8, 0.8, 1.0])
                             .with_scale(40.0)
-                            .with_z(0.8),
-                        Text::new(&line[*cursor..])
-                            .with_color([1.0, 1.0, 1.0, 1.0])
-                            .with_scale(40.0)
+                            .with_z(0.2),
+                        Text::new({
+                            if !buffer.is_empty() {
+                                &buffer[cursor_tail..]
+                            } else {
+                                ""
+                            }
+                        })
+                        .with_color([1.0, 1.0, 1.0, 1.0])
+                        .with_scale(40.0)
+                        .with_z(-1.0),
                     ]
                 },
                 ..Section::default()
             });
 
             // Draw the text!
-            glyph_brush
-                .draw_queued(
-                    device,
-                    staging_belt,
-                    encoder,
-                    view,
-                    config.width,
-                    config.height,
-                )
-                .expect("Draw queued");
+            if let Some(depth_view) = depth_view.as_ref() {
+                glyph_brush
+                    .draw_queued(
+                        device,
+                        staging_belt,
+                        encoder,
+                        view,
+                        wgpu::RenderPassDepthStencilAttachment {
+                            view: depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(-1.0),
+                                store: true,
+                            }),
+                            stencil_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(0),
+                                store: true,
+                            }),
+                        },
+                        config.width,
+                        config.height,
+                    )
+                    .expect("Draw queued");
+            }
         }
     }
 }
