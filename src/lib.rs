@@ -40,9 +40,28 @@ impl InputTheme for DefaultTheme {
 
     fn cursor(&self) -> Text<'_> {
         Text::new("_")
-             .with_color([0.4, 0.8, 0.8, 1.0])
-             .with_scale(40.0)
-             .with_z(0.2)
+            .with_color([0.4, 0.8, 0.8, 1.0])
+            .with_scale(40.0)
+            .with_z(0.2)
+    }
+
+    fn keywords<'a>(&self) -> Vec<(&'a str, [f32; 4])> {
+        let red = [0.7454, 0.14996, 0.17789, 1.0];
+        let blue = [0.11954, 0.42869, 0.86316, 1.0];
+        let purple = [0.56471, 0.18782, 0.72306, 1.0];
+        let _green = [0.31399, 0.54572, 0.1912, 1.0];
+        let yellow = [0.78354, 0.52712, 0.19807, 1.0];
+
+        vec![
+            ("process", blue), 
+            ("remote", blue), 
+            ("add", red), 
+            ("define", red),
+            (".text", purple),
+            (".int", purple),
+            (".symbol", purple),
+            ("command", yellow),
+        ]
     }
 }
 
@@ -53,8 +72,9 @@ pub struct ShellChannel(Option<Sender<(u32, u8)>>);
 
 /// Trait to edit parts of the shell
 pub trait InputTheme {
-    fn prompt(&self) -> Text<'_,>;
+    fn prompt(&self) -> Text<'_>;
     fn cursor(&self) -> Text<'_>;
+    fn keywords<'a>(&self) -> Vec<(&'a str, [f32; 4])>;
 }
 
 impl Shell {
@@ -68,7 +88,21 @@ impl Shell {
         Option<&mut CharDevice>,
     ) {
         if let Some(editing) = self.editing {
-            (self.theme.prompt(), self.theme.cursor(), self.brush.as_mut(), self.char_devices.get_mut(&editing))
+            if let Some(device) = self.char_devices.get_mut(&editing) {
+                (
+                    self.theme.prompt(),
+                    self.theme.cursor(),
+                    self.brush.as_mut(),
+                    Some(device),
+                )
+            } else {
+                (
+                    self.theme.prompt(),
+                    self.theme.cursor(),
+                    self.brush.as_mut(),
+                    None,
+                )
+            }
         } else {
             (self.theme.prompt(), self.theme.cursor(), None, None)
         }
@@ -88,19 +122,19 @@ impl Shell {
 
     /// Renders the input section
     pub fn render_input(&mut self, config: &SurfaceConfiguration) {
-        if let (prompt, cursor, Some(glyph_brush), Some(active)) = self.prepare_render_input() {
-            
-            // Renders the buffer
+        let keywords = self.theme.keywords();
+        if let (_prompt, cursor, Some(glyph_brush), Some(active)) = self.prepare_render_input() {
+            // Renders colors for tokens
             glyph_brush.queue(Section {
-                screen_position: (30.0, 300.0),
-                bounds: (config.width as f32, config.height as f32),
+                screen_position: (90.0, 180.0),
+                bounds: (config.width as f32 / 2.0, config.height as f32),
                 text: {
                     vec![
-                        prompt,
-                        Text::new(active.output().as_ref())
-                            .with_color([0.8, 0.4, 0.3, 1.0])
+                        //prompt,
+                        Text::new(active.output_symbols_only().as_ref())
+                            .with_color([0.56471, 0.18782, 0.72306, 1.0])
                             .with_scale(40.0)
-                            .with_z(0.9),
+                            .with_z(1.0),
                     ]
                 },
                 layout: Layout::Wrap {
@@ -110,23 +144,95 @@ impl Shell {
                 },
             });
 
-            // Renders the cursor
+            // Renders the buffer
             glyph_brush.queue(Section {
-                screen_position: (30.0, 300.0),
-                bounds: (config.width as f32, config.height as f32),
+                screen_position: (90.0, 180.0),
+                bounds: (config.width as f32 / 2.0, config.height as f32),
                 text: {
                     vec![
-                        prompt,
+                        //prompt,
+                        Text::new(active.output_alphanumeric_only().as_ref())
+                            .with_color([0.31399, 0.54572, 0.1912, 1.0])
+                            .with_scale(40.0)
+                            .with_z(0.8),
+                    ]
+                },
+                layout: Layout::Wrap {
+                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+                    h_align: HorizontalAlign::Left,
+                    v_align: VerticalAlign::Top,
+                },
+            });
+
+            for (keyword, color) in keywords {
+                // Renders keywords
+                glyph_brush.queue(Section {
+                    screen_position: (90.0, 180.0),
+                    bounds: (config.width as f32 / 2.0, config.height as f32),
+                    text: {
+                        vec![Text::new(active.output_keyword_only(keyword).as_ref())
+                            .with_color(color)
+                            .with_scale(40.0)
+                            .with_z(0.8)]
+                    },
+                    layout: Layout::Wrap {
+                        line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+                        h_align: HorizontalAlign::Left,
+                        v_align: VerticalAlign::Top,
+                    },
+                });
+            }
+
+            // Renders the cursor
+            glyph_brush.queue(Section {
+                screen_position: (90.0, 180.0),
+                bounds: (config.width as f32 / 2.0, config.height as f32),
+                text: {
+                    vec![
+                        // prompt,
                         Text::new(active.before_cursor().as_ref())
                             .with_color([0.0, 0.0, 0.0, 0.0])
                             .with_scale(40.0)
-                            .with_z(1.0),
+                            .with_z(-1.0),
                         cursor,
                         Text::new(active.after_cursor().as_ref())
                             .with_color([0.0, 0.0, 0.0, 0.0])
                             .with_scale(40.0)
                             .with_z(-1.0),
                     ]
+                },
+                layout: Layout::Wrap {
+                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+                    h_align: HorizontalAlign::Left,
+                    v_align: VerticalAlign::Top,
+                },
+            });
+
+            // Renders line numbers
+            glyph_brush.queue(Section {
+                screen_position: (10.0, 180.0),
+                bounds: (config.width as f32 / 2.0, config.height as f32),
+                text: {
+                    vec![Text::new(active.line_nos().as_ref())
+                        .with_color([1.0, 1.0, 1.0, 0.4])
+                        .with_scale(40.0)
+                        .with_z(1.0)]
+                },
+                ..Default::default()
+            });
+        }
+    }
+
+    pub fn render_channel(&mut self, config: &SurfaceConfiguration) {
+        if let (_prompt, _cursor, Some(glyph_brush), Some(active)) = self.prepare_render_input() {
+            glyph_brush.queue(Section {
+                screen_position: ((config.width as f32) / 2.0 + 60.0, 180.0),
+                bounds: (config.width as f32 / 2.0, config.height as f32),
+                text: {
+                    vec![Text::new(active.output().as_ref())
+                        .with_color([0.8, 0.4, 0.3, 1.0])
+                        .with_scale(40.0)
+                        .with_z(0.9)]
                 },
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
@@ -141,6 +247,13 @@ impl Shell {
 impl Extension for Shell {
     fn configure_app_world(_world: &mut lifec::World) {
         _world.register::<ShellChannel>();
+
+        _world.insert(wgpu::Color {
+            r: 0.02122,
+            g: 0.02519,
+            b: 0.03434,
+            a: 1.0,
+        });
     }
 
     fn on_window_event(
@@ -168,6 +281,14 @@ impl Extension for Shell {
                         }
                         winit::event::VirtualKeyCode::Up => {
                             editing.cursor_up();
+                        }
+                        winit::event::VirtualKeyCode::Tab => {
+                            if let Some(sender) = &self.byte_tx {
+                                sender.try_send((0, ' ' as u8)).ok();
+                                sender.try_send((0, ' ' as u8)).ok();
+                                sender.try_send((0, ' ' as u8)).ok();
+                                sender.try_send((0, ' ' as u8)).ok();
+                            }
                         }
                         _ => {}
                     },
@@ -224,6 +345,8 @@ impl Extension for Shell {
         staging_belt: &mut wgpu::util::StagingBelt,
     ) {
         self.render_input(config);
+
+        self.render_channel(config);
 
         // Draw the text!
         if let Some(depth_view) = depth_view.as_ref() {

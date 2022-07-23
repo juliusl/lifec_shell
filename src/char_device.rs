@@ -20,6 +20,11 @@ pub struct CharDevice {
 }
 
 impl CharDevice {
+    /// Returns the number of lines in the buffer
+    pub fn lines(&self) -> usize {
+        self.line_info.len()
+    }
+
     /// moves the cursor position up a line
     pub fn cursor_up(&mut self) {
         if self.line > 0 {
@@ -68,7 +73,7 @@ impl CharDevice {
     }
 
     /// Writes the next character to the decoder, and internal buffer
-    /// 
+    ///
     /// Updates internal counters
     pub fn write(&mut self, next: u8) {
         for keycode in self.decoder.write(next) {
@@ -99,11 +104,7 @@ impl CharDevice {
             }
         }
 
-        self.line_info = self
-            .buffer
-            .split('\r')
-            .map(|l| l.len())
-            .collect();
+        self.line_info = self.buffer.split('\r').map(|l| l.len()).collect();
     }
 
     /// Returns the cursor's tail
@@ -138,6 +139,67 @@ impl CharDevice {
         &self.buffer
     }
 
+    /// Returns the current outpput w/ all alphabetic chars replaced by a space
+    pub fn output_symbols_only(&self) -> impl AsRef<str> + '_ {
+        self.buffer
+            .clone()
+            .chars()
+            .map(|c| {
+                if !char::is_alphanumeric(c) || c == '\r' || c == '\t' {
+                    c.to_string()
+                } else {
+                    " ".to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Returns the current output w/ all non-alphabetic chars replaced by a space
+    pub fn output_alphanumeric_only(&self) -> impl AsRef<str> + '_ {
+        self.buffer
+            .clone()
+            .chars()
+            .map(|c| {
+                if char::is_alphanumeric(c) || c == '\r' || c == '\t' {
+                    c.to_string()
+                } else {
+                    " ".to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Returns the current output w/ all non-alphabetic chars replaced by a space
+    pub fn output_keyword_only(&self, keyword: impl AsRef<str>) -> impl AsRef<str> + '_ {
+        self.output()
+            .as_ref()
+            .split(keyword.as_ref())
+            .map(|a| {
+                a.chars()
+                    .map(|c| {
+                        if c == '\r' || c == '\t' {
+                            c.to_string()
+                        } else {
+                            " ".to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect::<Vec<_>>()
+            .join(keyword.as_ref())
+    }
+
+    /// Returns the current line nos
+    pub fn line_nos(&self) -> impl AsRef<str> + '_ {
+        (0..self.line_info.len())
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\r")
+    }
+
     /// Returns the current line the cursor is on
     pub fn get_current_line(&self) -> Option<String> {
         self.get_line(self.line)
@@ -151,7 +213,7 @@ impl CharDevice {
             .get(line_no)
             .and_then(|l| Some(l.to_string()))
     }
-    
+
     /// Takes the current buffer, resetting the state and clearing the decoder for this device
     pub fn take(&mut self) -> String {
         let output = self.buffer.clone();
