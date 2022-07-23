@@ -1,6 +1,9 @@
-use lifec::Extension;
+use std::collections::BTreeMap;
+
+use lifec::{Extension, Entity, Component, DenseVecStorage, WorldExt, Join};
 use terminal_keycode::{Decoder, KeyCode};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tracing::{event, Level};
 use wgpu::DepthStencilState;
 use wgpu_glyph::{
     ab_glyph, BuiltInLineBreaker, GlyphBrush, GlyphBrushBuilder, HorizontalAlign, Layout, Section,
@@ -16,9 +19,9 @@ pub struct Shell {
     /// terminal-keycode-decoder, use when connecting to remote processes
     decoder: Option<Decoder>,
     /// byte receiver
-    byte_rx: Option<Receiver<u8>>,
+    byte_rx: Option<Receiver<(u32, u8)>>,
     /// byte sender
-    byte_tx: Option<Sender<u8>>,
+    byte_tx: Option<Sender<(u32, u8)>>,
     /// char-limit
     char_limit: usize,
     /// char-count
@@ -27,8 +30,8 @@ pub struct Shell {
     cursor: usize,
     /// line number
     line: usize,
-    /// char_device
-    char_device: [u8; 1],
+    /// char_devices
+    char_devices: BTreeMap<u32, [u8; 1]>,
     /// character counts per line
     line_info: Vec<usize>,
     /// buffer
@@ -55,9 +58,21 @@ impl Shell {
     }
 
     pub fn goto_line(&mut self, line_no: usize) {
-        let chars = self.line_info.iter().take(line_no+1).sum::<usize>();
+        let chars = self.line_info.iter().take(line_no + 1).sum::<usize>();
 
         self.cursor = chars + line_no;
+    }
+
+    /// Returns true if the shell was taken.
+    pub fn add_device(&mut self, entity: Entity) -> Option<Sender<(u32, u8)>> {
+        if let Some(tx) = self.byte_tx.clone() {
+            let channel = entity.id();
+            self.char_devices.insert(channel, [0; 1]);
+
+            Some(tx)
+        } else {
+            None 
+        }
     }
 }
 
@@ -73,7 +88,7 @@ impl Extension for Shell {
             }
             lifec::editor::WindowEvent::ReceivedCharacter(char) => {
                 if let Some(sender) = &self.byte_tx {
-                    sender.try_send(*char as u8).ok();
+                    sender.try_send((0, *char as u8)).ok();
                 }
             }
             lifec::editor::WindowEvent::KeyboardInput { input, .. } => {
@@ -106,7 +121,7 @@ impl Extension for Shell {
                             }
                         }
                         winit::event::VirtualKeyCode::Down => {
-                            if self.line < self.line_info.len()-1 {
+                            if self.line < self.line_info.len() - 1 {
                                 self.line += 1;
                                 self.goto_line(self.line);
                             }
@@ -165,10 +180,13 @@ impl Extension for Shell {
             self.brush = Some(glyph_brush);
             self.decoder = Some(Decoder::new());
 
-            let (tx, rx) = channel::<u8>(300);
+            let (tx, rx) = channel::<(u32, u8)>(300);
             self.byte_rx = Some(rx);
             self.byte_tx = Some(tx);
             self.buffer = Some(String::default());
+            if self.char_devices.is_empty() {
+                self.char_devices.insert(0, [0; 1]);
+            }
         }
     }
 
@@ -193,67 +211,76 @@ impl Extension for Shell {
             char_limit,
             char_count,
             buffer: Some(buffer),
-            char_device: buf,
+            char_devices,
             cursor,
             line,
             line_info,
         } = self
         {
-            if let Some(next) = rx.try_recv().ok() {
-                buf[0] = next;
+            if let Some((channel, next)) = rx.try_recv().ok() {
+                event!(Level::TRACE, "received {next} for char_device {channel}");
+                if let Some(char_device) = char_devices.get_mut(&channel) {
+                    char_device[0] = next;
 
-                for keycode in decoder.write(next) {
-                    if let Some(printable) = keycode.printable() {
-                        buffer.insert(*cursor, printable);
-                        *cursor += 1 as usize;
-                    } else {
-                        match keycode {
-                            KeyCode::Backspace => {
-                                if *cursor > 0 && !buffer.is_empty() {
-                                    *cursor -= 1;
-                                    match buffer.remove(*cursor) {
-                                        '\r' | '\n' => {
-                                            if *line > 0 {
-                                                *line -= 1;
+                    // channel 0 is the input_buffer
+                    if channel == 0 {
+                        for keycode in decoder.write(next) {
+                            if let Some(printable) = keycode.printable() {
+                                buffer.insert(*cursor, printable);
+                                *cursor += 1 as usize;
+                            } else {
+                                match keycode {
+                                    KeyCode::Backspace => {
+                                        if *cursor > 0 && !buffer.is_empty() {
+                                            *cursor -= 1;
+                                            match buffer.remove(*cursor) {
+                                                '\r' | '\n' => {
+                                                    if *line > 0 {
+                                                        *line -= 1;
+                                                    }
+                                                }
+                                                _ => {}
                                             }
                                         }
-                                        _ => {}
                                     }
+                                    _ => {}
                                 }
                             }
-                            _ => {}
+    
+                            if keycode == KeyCode::Enter {
+                                *line += 1;
+                            }
                         }
                     }
 
-                    if keycode == KeyCode::Enter {
-                        *line += 1;
-                    }
+                    // TODO, handle channels
                 }
             }
 
-            for keycode in decoder.write(buf[0]) {
-                glyph_brush.queue(Section {
-                    screen_position: (30.0, 30.0),
-                    bounds: (config.width as f32, config.height as f32),
-                    text: vec![Text::new(
-                        format!(
-                            "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={} line_info={:?}\rcurrent_line={:?}",
-                            keycode,
-                            keycode.bytes(),
-                            keycode.printable(),
-                            char_limit,
-                            char_count,
-                            cursor,
-                            line,
-                            line_info,
-                            current_line,
+            for (_, char_device) in self.char_devices.iter() {
+                for keycode in decoder.write(char_device[0]) {
+                    glyph_brush.queue(Section {
+                        screen_position: (30.0, 30.0),
+                        bounds: (config.width as f32, config.height as f32),
+                        text: vec![Text::new(
+                            format!(
+                                "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={} line_info={:?}\rcurrent_line={:?}",
+                                keycode,
+                                keycode.bytes(),
+                                keycode.printable(),
+                                char_limit,
+                                char_count,
+                                cursor,
+                                line,
+                                line_info,
+                                current_line,
+                            ).as_str(),
                         )
-                        .as_str(),
-                    )
-                    .with_color([1.0, 1.0, 1.0, 1.0])
-                    .with_scale(40.0)],
-                    ..Default::default()
-                });
+                        .with_color([1.0, 1.0, 1.0, 1.0])
+                        .with_scale(40.0)],
+                        ..Default::default()
+                    });
+                }
             }
 
             let cursor_tail = {
@@ -352,4 +379,22 @@ impl Extension for Shell {
             }
         }
     }
+
+    fn on_run(&'_ mut self, app_world: &lifec::World) {
+        let mut shell_outputs = app_world.write_component::<ShellChannel>();
+        let entities = app_world.entities();
+
+        for (entity, shell_output) in (&entities, &mut shell_outputs).join() {
+            if let ShellChannel(None) = shell_output {
+                if let Some(tx) = self.add_device(entity) {
+                    shell_output.0 = Some(tx);
+                }
+            }
+        }
+    }
 }
+
+/// This component adds a channel to this shell
+#[derive(Component, Default)]
+#[storage(DenseVecStorage)]
+pub struct ShellChannel(Option<Sender<(u32, u8)>>);
