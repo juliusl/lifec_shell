@@ -1,15 +1,16 @@
+use lifec::{Component, DenseVecStorage, Entity, Extension, Join, WorldExt};
 use std::collections::BTreeMap;
-
-use lifec::{Extension, Entity, Component, DenseVecStorage, WorldExt, Join};
-use terminal_keycode::{Decoder, KeyCode};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tracing::{event, Level};
-use wgpu::DepthStencilState;
+use wgpu::{DepthStencilState, SurfaceConfiguration};
 use wgpu_glyph::{
     ab_glyph, BuiltInLineBreaker, GlyphBrush, GlyphBrushBuilder, HorizontalAlign, Layout, Section,
     Text, VerticalAlign,
 };
 use winit::event::ElementState;
+
+mod char_device;
+pub use char_device::CharDevice;
 
 /// Shell extension for the lifec runtime
 #[derive(Default)]
@@ -20,52 +21,25 @@ pub struct Shell {
     byte_rx: Option<Receiver<(u32, u8)>>,
     /// byte sender
     byte_tx: Option<Sender<(u32, u8)>>,
-    /// char-limit
-    char_limit: usize,
-    /// char-count
-    char_count: usize,
-    /// cursor
-    cursor: usize,
-    /// line number
-    line: usize,
     /// char_devices, the first device writes to the shell buffer, and the other devices are for displays
     char_devices: BTreeMap<u32, CharDevice>,
-    /// character counts per line
-    line_info: Vec<usize>,
-    /// buffer
-    buffer: Option<String>,
-}
 
-/// Compatibility layer for char_devices, such as terminal io
-#[derive(Default)]
-pub struct CharDevice {
-    buffer: [u8; 1],
-    decoder: Decoder,
+    editing: Option<u32>,
 }
 
 impl Shell {
-    /// Returns the current line the cursor is on
-    pub fn get_current_line(&self) -> Option<String> {
-        self.get_line(self.line)
-    }
-
-    /// Returns the line at line_no
-    pub fn get_line(&self, line_no: usize) -> Option<String> {
-        if let Some(buffer) = &self.buffer {
-            buffer
-                .split('\r')
-                .collect::<Vec<_>>()
-                .get(line_no)
-                .and_then(|l| Some(l.to_string()))
+    /// Returns the text brush and char device being edited
+    pub fn prepare_render_input(
+        &mut self,
+    ) -> (
+        Option<&mut GlyphBrush<DepthStencilState>>,
+        Option<&mut CharDevice>,
+    ) {
+        if let Some(editing) = self.editing {
+            (self.brush.as_mut(), self.char_devices.get_mut(&editing))
         } else {
-            None
+            (None, None)
         }
-    }
-
-    pub fn goto_line(&mut self, line_no: usize) {
-        let chars = self.line_info.iter().take(line_no + 1).sum::<usize>();
-
-        self.cursor = chars + line_no;
     }
 
     /// Returns true if the shell was taken.
@@ -76,88 +50,103 @@ impl Shell {
 
             Some(tx)
         } else {
-            None 
+            None
+        }
+    }
+
+    /// Renders the input section
+    pub fn render_input(&mut self, config: &SurfaceConfiguration) {
+        if let (Some(glyph_brush), Some(active)) = self.prepare_render_input() {
+            glyph_brush.queue(Section {
+                screen_position: (30.0, 300.0),
+                bounds: (config.width as f32, config.height as f32),
+                text: {
+                    vec![
+                        Text::new("> ")
+                            .with_color([1.0, 0.0, 0.0, 1.0])
+                            .with_scale(40.0),
+                        Text::new(active.output().as_ref())
+                            .with_color([1.0, 1.0, 1.0, 1.0])
+                            .with_scale(40.0)
+                            .with_z(0.9),
+                    ]
+                },
+                layout: Layout::Wrap {
+                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+                    h_align: HorizontalAlign::Left,
+                    v_align: VerticalAlign::Top,
+                },
+            });
+
+            glyph_brush.queue(Section {
+                screen_position: (30.0, 300.0),
+                bounds: (config.width as f32, config.height as f32),
+                text: {
+                    vec![
+                        Text::new("> ")
+                            .with_color([1.0, 0.0, 0.0, 1.0])
+                            .with_scale(40.0),
+                        Text::new(active.before_cursor().as_ref())
+                            .with_color([1.0, 1.0, 1.0, 1.0])
+                            .with_scale(40.0)
+                            .with_z(-1.0),
+                        Text::new("_")
+                            .with_color([0.4, 0.8, 0.8, 1.0])
+                            .with_scale(40.0)
+                            .with_z(0.2),
+                        Text::new(active.after_cursor().as_ref())
+                            .with_color([1.0, 1.0, 1.0, 1.0])
+                            .with_scale(40.0)
+                            .with_z(-1.0),
+                    ]
+                },
+                layout: Layout::Wrap {
+                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+                    h_align: HorizontalAlign::Left,
+                    v_align: VerticalAlign::Top,
+                },
+            });
         }
     }
 }
 
 impl Extension for Shell {
+    fn configure_app_world(_world: &mut lifec::World) {
+        _world.register::<ShellChannel>();
+    }
+
     fn on_window_event(
         &'_ mut self,
         _app_world: &lifec::World,
         event: &'_ lifec::editor::WindowEvent<'_>,
     ) {
-        match event {
-            lifec::editor::WindowEvent::Resized(size) => {
-                self.char_limit = (size.width / 16) as usize;
-            }
-            lifec::editor::WindowEvent::ReceivedCharacter(char) => {
+        match (event, self.prepare_render_input()) {
+            (lifec::editor::WindowEvent::ReceivedCharacter(char), (Some(_), Some(_))) => {
                 if let Some(sender) = &self.byte_tx {
                     sender.try_send((0, *char as u8)).ok();
                 }
             }
-            lifec::editor::WindowEvent::KeyboardInput { input, .. } => {
+            (lifec::editor::WindowEvent::KeyboardInput { input, .. }, (_, Some(editing))) => {
                 match (input.virtual_keycode, input.state) {
                     (Some(key), ElementState::Released) => match key {
                         winit::event::VirtualKeyCode::Left => {
-                            if self.cursor > 1
-                                && !self.buffer.clone().unwrap_or_default().is_empty()
-                            {
-                                self.cursor -= 1;
-
-                                if let Some(buffer) = &self.buffer {
-                                    let check = self.cursor + 1;
-                                    if let Some(b'\r') = buffer.as_bytes().get(check) {
-                                        self.line -= 1;
-                                    }
-                                }
-                            }
+                            editing.cursor_left();
                         }
                         winit::event::VirtualKeyCode::Right => {
-                            if self.cursor < self.buffer.clone().unwrap_or_default().len() {
-                                self.cursor += 1;
-
-                                if let Some(buffer) = &self.buffer {
-                                    let check = self.cursor - 1;
-                                    if let Some(b'\r') = buffer.as_bytes().get(check) {
-                                        self.line += 1;
-                                    }
-                                }
-                            }
+                            editing.cursor_right();
                         }
                         winit::event::VirtualKeyCode::Down => {
-                            if self.line < self.line_info.len() - 1 {
-                                self.line += 1;
-                                self.goto_line(self.line);
-                            }
+                            editing.cursor_down();
                         }
                         winit::event::VirtualKeyCode::Up => {
-                            if self.line > 0 {
-                                self.line -= 1;
-                                self.goto_line(self.line);
-                            }
+                            editing.cursor_up();
                         }
                         _ => {}
                     },
                     _ => {}
                 }
             }
-            lifec::editor::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                self.char_limit = (new_inner_size.width / 16) as usize;
-            }
             _ => {}
-        }
-
-        self.line_info = self
-            .buffer
-            .clone()
-            .unwrap_or_default()
-            .split('\r')
-            .map(|l| l.len())
-            .collect();
-
-        if let Some(count) = self.line_info.get(self.line) {
-            self.char_count = *count;
         }
     }
 
@@ -187,9 +176,9 @@ impl Extension for Shell {
             let (tx, rx) = channel::<(u32, u8)>(300);
             self.byte_rx = Some(rx);
             self.byte_tx = Some(tx);
-            self.buffer = Some(String::default());
             if self.char_devices.is_empty() {
                 self.char_devices.insert(0, CharDevice::default());
+                self.editing = Some(0);
             }
         }
     }
@@ -206,159 +195,12 @@ impl Extension for Shell {
         encoder: &mut wgpu::CommandEncoder,
         staging_belt: &mut wgpu::util::StagingBelt,
     ) {
-        let current_line = &self.get_current_line();
-        if let Self {
-            brush: Some(glyph_brush),
-            byte_rx: Some(rx),
-            byte_tx: _,
-            char_limit,
-            char_count,
-            buffer: Some(buffer),
-            char_devices,
-            cursor,
-            line,
-            line_info,
-        } = self
-        {
-            if let Some((channel, next)) = rx.try_recv().ok() {
-                event!(Level::TRACE, "received {next} for char_device {channel}");
-                if let Some(CharDevice { buffer: char_device, decoder }) = char_devices.get_mut(&channel) {
-                    char_device[0] = next;
+        self.render_input(config);
 
-                    // channel 0 is the input_buffer
-                    if channel == 0 {
-                        for keycode in decoder.write(next) {
-                            if let Some(printable) = keycode.printable() {
-                                buffer.insert(*cursor, printable);
-                                *cursor += 1 as usize;
-                            } else {
-                                match keycode {
-                                    KeyCode::Backspace => {
-                                        if *cursor > 0 && !buffer.is_empty() {
-                                            *cursor -= 1;
-                                            match buffer.remove(*cursor) {
-                                                '\r' | '\n' => {
-                                                    if *line > 0 {
-                                                        *line -= 1;
-                                                    }
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-    
-                            if keycode == KeyCode::Enter {
-                                *line += 1;
-                            }
-                        }
-                    }
-
-                    // TODO, handle channels
-                }
-            }
-
-            for (_, CharDevice { buffer: char_device, decoder }) in self.char_devices.iter_mut() {
-                for keycode in decoder.write(char_device[0]) {
-                    glyph_brush.queue(Section {
-                        screen_position: (30.0, 30.0),
-                        bounds: (config.width as f32, config.height as f32),
-                        text: vec![Text::new(
-                            format!(
-                                "code={:?} bytes={:?} printable={:?}\rchar_limit={}\rchar_count={}\rcursor={} lines={} line_info={:?}\rcurrent_line={:?}",
-                                keycode,
-                                keycode.bytes(),
-                                keycode.printable(),
-                                char_limit,
-                                char_count,
-                                cursor,
-                                line,
-                                line_info,
-                                current_line,
-                            ).as_str(),
-                        )
-                        .with_color([1.0, 1.0, 1.0, 1.0])
-                        .with_scale(40.0)],
-                        ..Default::default()
-                    });
-                }
-            }
-
-            let cursor_tail = {
-                if *cursor > 1 {
-                    *cursor - 1
-                } else {
-                    0
-                }
-            };
-
-            glyph_brush.queue(Section {
-                screen_position: (30.0, 300.0),
-                bounds: (config.width as f32, config.height as f32),
-                text: {
-                    vec![
-                        Text::new("> ")
-                            .with_color([1.0, 0.0, 0.0, 1.0])
-                            .with_scale(40.0),
-                        Text::new(&buffer)
-                            .with_color([1.0, 1.0, 1.0, 1.0])
-                            .with_scale(40.0)
-                            .with_z(0.9),
-                    ]
-                },
-                layout: Layout::Wrap {
-                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
-                    h_align: HorizontalAlign::Left,
-                    v_align: VerticalAlign::Top,
-                },
-            });
-
-            glyph_brush.queue(Section {
-                screen_position: (30.0, 300.0),
-                bounds: (config.width as f32, config.height as f32),
-                text: {
-                    vec![
-                        Text::new("> ")
-                            .with_color([1.0, 0.0, 0.0, 1.0])
-                            .with_scale(40.0),
-                        Text::new({
-                            if !buffer.is_empty() {
-                                &buffer[..*cursor]
-                            } else {
-                                ""
-                            }
-                        })
-                        .with_color([1.0, 1.0, 1.0, 1.0])
-                        .with_scale(40.0)
-                        .with_z(-1.0),
-                        Text::new("_")
-                            .with_color([0.4, 0.8, 0.8, 1.0])
-                            .with_scale(40.0)
-                            .with_z(0.2),
-                        Text::new({
-                            if !buffer.is_empty() {
-                                &buffer[cursor_tail..]
-                            } else {
-                                ""
-                            }
-                        })
-                        .with_color([1.0, 1.0, 1.0, 1.0])
-                        .with_scale(40.0)
-                        .with_z(-1.0),
-                    ]
-                },
-                layout: Layout::Wrap {
-                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
-                    h_align: HorizontalAlign::Left,
-                    v_align: VerticalAlign::Top,
-                },
-            });
-
-            // Draw the text!
-            if let Some(depth_view) = depth_view.as_ref() {
-                glyph_brush
+        // Draw the text!
+        if let Some(depth_view) = depth_view.as_ref() {
+            if let Some(brush) = self.brush.as_mut() {
+                brush
                     .draw_queued(
                         device,
                         staging_belt,
@@ -383,7 +225,24 @@ impl Extension for Shell {
         }
     }
 
+    fn on_ui(&'_ mut self, _app_world: &lifec::World, ui: &'_ imgui::Ui<'_>) {
+        if ui.button("Dump current line") {
+            if let (_, Some(active)) = self.prepare_render_input() {
+                eprintln!("{:?}", active.get_current_line());
+            }
+        }
+    }
+
     fn on_run(&'_ mut self, app_world: &lifec::World) {
+        if let Some(rx) = self.byte_rx.as_mut() {
+            if let Some((channel, next)) = rx.try_recv().ok() {
+                event!(Level::TRACE, "received {next} for char_device {channel}");
+                if let Some(char_device) = self.char_devices.get_mut(&channel) {
+                    char_device.write(next);
+                }
+            }
+        }
+        
         let mut shell_outputs = app_world.write_component::<ShellChannel>();
         let entities = app_world.entities();
 
@@ -401,3 +260,32 @@ impl Extension for Shell {
 #[derive(Component, Default)]
 #[storage(DenseVecStorage)]
 pub struct ShellChannel(Option<Sender<(u32, u8)>>);
+
+// for (_, CharDevice { write_buffer: char_device, decoder, buffer: output, .. }) in self.char_devices.iter_mut() {
+//     for keycode in decoder.write(char_device[0]) {
+//         glyph_brush.queue(Section {
+//             screen_position: (30.0, 30.0),
+//             bounds: (config.width as f32, config.height as f32),
+//             text: vec![Text::new(
+//                 format!(
+//                     "code={:?} bytes={:?} printable={:?}",
+//                     keycode,
+//                     keycode.bytes(),
+//                     keycode.printable(),
+//                 ).as_str(),
+//             )
+//             .with_color([1.0, 1.0, 1.0, 1.0])
+//             .with_scale(40.0)],
+//             ..Default::default()
+//         });
+//     }
+
+//     glyph_brush.queue(Section {
+//         screen_position: (200.0, 30.0),
+//         bounds: (config.width as f32, config.height as f32),
+//         text: vec![Text::new(output.as_str())
+//         .with_color([1.0, 1.0, 1.0, 1.0])
+//         .with_scale(40.0)],
+//         ..Default::default()
+//     });
+// }
