@@ -1,8 +1,13 @@
+use lifec::Component;
+use lifec::HashMapStorage;
 use terminal_keycode::{Decoder, KeyCode};
 
-#[derive(Default)]
+#[derive(Component, Default)]
+#[storage(HashMapStorage)]
 pub struct CharDevice {
+    /// Decodes terminal character sequences
     decoder: Decoder,
+    /// The current buffer this device is writing to
     buffer: String,
     /// character counts per line
     line_info: Vec<usize>,
@@ -145,5 +150,16 @@ impl CharDevice {
             .collect::<Vec<_>>()
             .get(line_no)
             .and_then(|l| Some(l.to_string()))
+    }
+    
+    /// Takes the current buffer, resetting the state and clearing the decoder for this device
+    pub fn take(&mut self) -> String {
+        let output = self.buffer.clone();
+        self.buffer.clear();
+        self.cursor = 0;
+        self.line = 0;
+        self.line_info.clear();
+        self.decoder = Decoder::default();
+        output
     }
 }

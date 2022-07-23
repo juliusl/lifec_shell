@@ -23,9 +23,14 @@ pub struct Shell {
     byte_tx: Option<Sender<(u32, u8)>>,
     /// char_devices, the first device writes to the shell buffer, and the other devices are for displays
     char_devices: BTreeMap<u32, CharDevice>,
-
+    /// sets the current char_device that can be edited
     editing: Option<u32>,
 }
+
+/// This component adds a channel to this shell
+#[derive(Component, Default)]
+#[storage(DenseVecStorage)]
+pub struct ShellChannel(Option<Sender<(u32, u8)>>);
 
 impl Shell {
     /// Returns the text brush and char device being edited
@@ -43,12 +48,12 @@ impl Shell {
     }
 
     /// Returns true if the shell was taken.
-    pub fn add_device(&mut self, entity: Entity) -> Option<Sender<(u32, u8)>> {
+    pub fn add_device(&mut self, entity: Entity) -> Option<ShellChannel> {
         if let Some(tx) = self.byte_tx.clone() {
             let channel = entity.id();
             self.char_devices.insert(channel, CharDevice::default());
 
-            Some(tx)
+            Some(ShellChannel(Some(tx)))
         } else {
             None
         }
@@ -225,14 +230,6 @@ impl Extension for Shell {
         }
     }
 
-    fn on_ui(&'_ mut self, _app_world: &lifec::World, ui: &'_ imgui::Ui<'_>) {
-        if ui.button("Dump current line") {
-            if let (_, Some(active)) = self.prepare_render_input() {
-                eprintln!("{:?}", active.get_current_line());
-            }
-        }
-    }
-
     fn on_run(&'_ mut self, app_world: &lifec::World) {
         if let Some(rx) = self.byte_rx.as_mut() {
             if let Some((channel, next)) = rx.try_recv().ok() {
@@ -248,18 +245,13 @@ impl Extension for Shell {
 
         for (entity, shell_output) in (&entities, &mut shell_outputs).join() {
             if let ShellChannel(None) = shell_output {
-                if let Some(tx) = self.add_device(entity) {
-                    shell_output.0 = Some(tx);
+                if let Some(channel) = self.add_device(entity) {
+                    *shell_output = channel;
                 }
             }
         }
     }
 }
-
-/// This component adds a channel to this shell
-#[derive(Component, Default)]
-#[storage(DenseVecStorage)]
-pub struct ShellChannel(Option<Sender<(u32, u8)>>);
 
 // for (_, CharDevice { write_buffer: char_device, decoder, buffer: output, .. }) in self.char_devices.iter_mut() {
 //     for keycode in decoder.write(char_device[0]) {
