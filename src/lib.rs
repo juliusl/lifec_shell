@@ -14,7 +14,7 @@ pub use char_device::CharDevice;
 
 /// Shell extension for the lifec runtime
 #[derive(Default)]
-pub struct Shell {
+pub struct Shell<Theme = DefaultTheme> {
     /// glyph_brush, for rendering fonts
     brush: Option<GlyphBrush<DepthStencilState>>,
     /// byte receiver
@@ -25,6 +25,25 @@ pub struct Shell {
     char_devices: BTreeMap<u32, CharDevice>,
     /// sets the current char_device that can be edited
     editing: Option<u32>,
+    theme: Theme,
+}
+
+#[derive(Default)]
+pub struct DefaultTheme;
+
+impl InputTheme for DefaultTheme {
+    fn prompt(&self) -> Text<'_> {
+        Text::new("> ")
+            .with_color([1.0, 0.0, 0.0, 1.0])
+            .with_scale(40.0)
+    }
+
+    fn cursor(&self) -> Text<'_> {
+        Text::new("_")
+             .with_color([0.4, 0.8, 0.8, 1.0])
+             .with_scale(40.0)
+             .with_z(0.2)
+    }
 }
 
 /// This component adds a channel to this shell
@@ -32,18 +51,26 @@ pub struct Shell {
 #[storage(DenseVecStorage)]
 pub struct ShellChannel(Option<Sender<(u32, u8)>>);
 
+/// Trait to edit parts of the shell
+pub trait InputTheme {
+    fn prompt(&self) -> Text<'_,>;
+    fn cursor(&self) -> Text<'_>;
+}
+
 impl Shell {
     /// Returns the text brush and char device being edited
     pub fn prepare_render_input(
         &mut self,
     ) -> (
+        Text,
+        Text,
         Option<&mut GlyphBrush<DepthStencilState>>,
         Option<&mut CharDevice>,
     ) {
         if let Some(editing) = self.editing {
-            (self.brush.as_mut(), self.char_devices.get_mut(&editing))
+            (self.theme.prompt(), self.theme.cursor(), self.brush.as_mut(), self.char_devices.get_mut(&editing))
         } else {
-            (None, None)
+            (self.theme.prompt(), self.theme.cursor(), None, None)
         }
     }
 
@@ -61,17 +88,17 @@ impl Shell {
 
     /// Renders the input section
     pub fn render_input(&mut self, config: &SurfaceConfiguration) {
-        if let (Some(glyph_brush), Some(active)) = self.prepare_render_input() {
+        if let (prompt, cursor, Some(glyph_brush), Some(active)) = self.prepare_render_input() {
+            
+            // Renders the buffer
             glyph_brush.queue(Section {
                 screen_position: (30.0, 300.0),
                 bounds: (config.width as f32, config.height as f32),
                 text: {
                     vec![
-                        Text::new("> ")
-                            .with_color([1.0, 0.0, 0.0, 1.0])
-                            .with_scale(40.0),
+                        prompt,
                         Text::new(active.output().as_ref())
-                            .with_color([1.0, 1.0, 1.0, 1.0])
+                            .with_color([0.8, 0.4, 0.3, 1.0])
                             .with_scale(40.0)
                             .with_z(0.9),
                     ]
@@ -83,24 +110,20 @@ impl Shell {
                 },
             });
 
+            // Renders the cursor
             glyph_brush.queue(Section {
                 screen_position: (30.0, 300.0),
                 bounds: (config.width as f32, config.height as f32),
                 text: {
                     vec![
-                        Text::new("> ")
-                            .with_color([1.0, 0.0, 0.0, 1.0])
-                            .with_scale(40.0),
+                        prompt,
                         Text::new(active.before_cursor().as_ref())
-                            .with_color([1.0, 1.0, 1.0, 1.0])
+                            .with_color([0.0, 0.0, 0.0, 0.0])
                             .with_scale(40.0)
-                            .with_z(-1.0),
-                        Text::new("_")
-                            .with_color([0.4, 0.8, 0.8, 1.0])
-                            .with_scale(40.0)
-                            .with_z(0.2),
+                            .with_z(1.0),
+                        cursor,
                         Text::new(active.after_cursor().as_ref())
-                            .with_color([1.0, 1.0, 1.0, 1.0])
+                            .with_color([0.0, 0.0, 0.0, 0.0])
                             .with_scale(40.0)
                             .with_z(-1.0),
                     ]
@@ -131,7 +154,7 @@ impl Extension for Shell {
                     sender.try_send((0, *char as u8)).ok();
                 }
             }
-            (lifec::editor::WindowEvent::KeyboardInput { input, .. }, (_, Some(editing))) => {
+            (lifec::editor::WindowEvent::KeyboardInput { input, .. }, (.., Some(editing))) => {
                 match (input.virtual_keycode, input.state) {
                     (Some(key), ElementState::Released) => match key {
                         winit::event::VirtualKeyCode::Left => {
