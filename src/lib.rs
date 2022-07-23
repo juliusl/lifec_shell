@@ -121,7 +121,7 @@ impl Extension for Shell {
         event: &'_ lifec::editor::WindowEvent<'_>,
     ) {
         match (event, self.prepare_render_input()) {
-            (lifec::editor::WindowEvent::ReceivedCharacter(char), (Some(_), Some(_))) => {
+            (lifec::editor::WindowEvent::ReceivedCharacter(char), _) => {
                 if let Some(sender) = &self.byte_tx {
                     sender.try_send((0, *char as u8)).ok();
                 }
@@ -242,7 +242,7 @@ impl Extension for Shell {
                 }
             }
         }
-        
+
         let mut shell_outputs = app_world.write_component::<ShellChannel>();
         let entities = app_world.entities();
 

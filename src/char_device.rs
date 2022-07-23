@@ -2,9 +2,8 @@ use terminal_keycode::{Decoder, KeyCode};
 
 #[derive(Default)]
 pub struct CharDevice {
-    pub write_buffer: [u8; 1],
-    pub decoder: Decoder,
-    pub buffer: String,
+    decoder: Decoder,
+    buffer: String,
     /// character counts per line
     line_info: Vec<usize>,
     /// cursor
@@ -63,6 +62,9 @@ impl CharDevice {
         self.cursor = chars + line_no;
     }
 
+    /// Writes the next character to the decoder, and internal buffer
+    /// 
+    /// Updates internal counters
     pub fn write(&mut self, next: u8) {
         for keycode in self.decoder.write(next) {
             if let Some(printable) = keycode.printable() {
