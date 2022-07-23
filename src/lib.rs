@@ -2,7 +2,11 @@ use lifec::Extension;
 use terminal_keycode::{Decoder, KeyCode};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use wgpu::DepthStencilState;
-use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, Section, Text};
+use wgpu_glyph::{
+    ab_glyph, BuiltInLineBreaker, GlyphBrush, GlyphBrushBuilder, HorizontalAlign, Layout, Section,
+    Text, VerticalAlign,
+};
+use winit::event::ElementState;
 
 /// Shell extension for the lifec runtime
 #[derive(Default)]
@@ -23,8 +27,8 @@ pub struct Shell {
     cursor: usize,
     /// line number
     line: usize,
-    /// buffer
-    buf: [u8; 1],
+    /// char_device
+    char_device: [u8; 1],
     /// character counts per line
     line_info: Vec<usize>,
     /// buffer
@@ -32,12 +36,28 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// Returns the current line the cursor is on
     pub fn get_current_line(&self) -> Option<String> {
+        self.get_line(self.line)
+    }
+
+    /// Returns the line at line_no
+    pub fn get_line(&self, line_no: usize) -> Option<String> {
         if let Some(buffer) = &self.buffer {
-            buffer.split('\r').collect::<Vec<_>>().get(self.line).and_then(|l| Some(l.to_string()))
+            buffer
+                .split('\r')
+                .collect::<Vec<_>>()
+                .get(line_no)
+                .and_then(|l| Some(l.to_string()))
         } else {
-            None 
+            None
         }
+    }
+
+    pub fn goto_line(&mut self, line_no: usize) {
+        let chars = self.line_info.iter().take(line_no+1).sum::<usize>();
+
+        self.cursor = chars + line_no;
     }
 }
 
@@ -57,8 +77,8 @@ impl Extension for Shell {
                 }
             }
             lifec::editor::WindowEvent::KeyboardInput { input, .. } => {
-                match input.virtual_keycode {
-                    Some(key) => match key {
+                match (input.virtual_keycode, input.state) {
+                    (Some(key), ElementState::Released) => match key {
                         winit::event::VirtualKeyCode::Left => {
                             if self.cursor > 1
                                 && !self.buffer.clone().unwrap_or_default().is_empty()
@@ -85,9 +105,17 @@ impl Extension for Shell {
                                 }
                             }
                         }
-                        winit::event::VirtualKeyCode::Down => {}
+                        winit::event::VirtualKeyCode::Down => {
+                            if self.line < self.line_info.len()-1 {
+                                self.line += 1;
+                                self.goto_line(self.line);
+                            }
+                        }
                         winit::event::VirtualKeyCode::Up => {
-                            
+                            if self.line > 0 {
+                                self.line -= 1;
+                                self.goto_line(self.line);
+                            }
                         }
                         _ => {}
                     },
@@ -137,7 +165,7 @@ impl Extension for Shell {
             self.brush = Some(glyph_brush);
             self.decoder = Some(Decoder::new());
 
-            let (tx, rx) = channel::<u8>(100);
+            let (tx, rx) = channel::<u8>(300);
             self.byte_rx = Some(rx);
             self.byte_tx = Some(tx);
             self.buffer = Some(String::default());
@@ -161,11 +189,11 @@ impl Extension for Shell {
             brush: Some(glyph_brush),
             decoder: Some(decoder),
             byte_rx: Some(rx),
-            byte_tx: Some(tx),
+            byte_tx: _,
             char_limit,
             char_count,
             buffer: Some(buffer),
-            buf,
+            char_device: buf,
             cursor,
             line,
             line_info,
@@ -201,11 +229,6 @@ impl Extension for Shell {
                         *line += 1;
                     }
                 }
-
-                if char_count > char_limit {
-                    tx.try_send('\n' as u8).ok();
-                    *line += 1;
-                }
             }
 
             for keycode in decoder.write(buf[0]) {
@@ -229,7 +252,7 @@ impl Extension for Shell {
                     )
                     .with_color([1.0, 1.0, 1.0, 1.0])
                     .with_scale(40.0)],
-                    ..Section::default()
+                    ..Default::default()
                 });
             }
 
@@ -255,7 +278,11 @@ impl Extension for Shell {
                             .with_z(0.9),
                     ]
                 },
-                ..Section::default()
+                layout: Layout::Wrap {
+                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+                    h_align: HorizontalAlign::Left,
+                    v_align: VerticalAlign::Top,
+                },
             });
 
             glyph_brush.queue(Section {
@@ -292,7 +319,11 @@ impl Extension for Shell {
                         .with_z(-1.0),
                     ]
                 },
-                ..Section::default()
+                layout: Layout::Wrap {
+                    line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+                    h_align: HorizontalAlign::Left,
+                    v_align: VerticalAlign::Top,
+                },
             });
 
             // Draw the text!
