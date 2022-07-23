@@ -16,8 +16,6 @@ use winit::event::ElementState;
 pub struct Shell {
     /// glyph_brush, for rendering fonts
     brush: Option<GlyphBrush<DepthStencilState>>,
-    /// terminal-keycode-decoder, use when connecting to remote processes
-    decoder: Option<Decoder>,
     /// byte receiver
     byte_rx: Option<Receiver<(u32, u8)>>,
     /// byte sender
@@ -30,12 +28,19 @@ pub struct Shell {
     cursor: usize,
     /// line number
     line: usize,
-    /// char_devices
-    char_devices: BTreeMap<u32, [u8; 1]>,
+    /// char_devices, the first device writes to the shell buffer, and the other devices are for displays
+    char_devices: BTreeMap<u32, CharDevice>,
     /// character counts per line
     line_info: Vec<usize>,
     /// buffer
     buffer: Option<String>,
+}
+
+/// Compatibility layer for char_devices, such as terminal io
+#[derive(Default)]
+pub struct CharDevice {
+    buffer: [u8; 1],
+    decoder: Decoder,
 }
 
 impl Shell {
@@ -67,7 +72,7 @@ impl Shell {
     pub fn add_device(&mut self, entity: Entity) -> Option<Sender<(u32, u8)>> {
         if let Some(tx) = self.byte_tx.clone() {
             let channel = entity.id();
-            self.char_devices.insert(channel, [0; 1]);
+            self.char_devices.insert(channel, CharDevice::default());
 
             Some(tx)
         } else {
@@ -178,14 +183,13 @@ impl Extension for Shell {
                 .build(&device, wgpu::TextureFormat::Bgra8UnormSrgb);
 
             self.brush = Some(glyph_brush);
-            self.decoder = Some(Decoder::new());
 
             let (tx, rx) = channel::<(u32, u8)>(300);
             self.byte_rx = Some(rx);
             self.byte_tx = Some(tx);
             self.buffer = Some(String::default());
             if self.char_devices.is_empty() {
-                self.char_devices.insert(0, [0; 1]);
+                self.char_devices.insert(0, CharDevice::default());
             }
         }
     }
@@ -205,7 +209,6 @@ impl Extension for Shell {
         let current_line = &self.get_current_line();
         if let Self {
             brush: Some(glyph_brush),
-            decoder: Some(decoder),
             byte_rx: Some(rx),
             byte_tx: _,
             char_limit,
@@ -219,7 +222,7 @@ impl Extension for Shell {
         {
             if let Some((channel, next)) = rx.try_recv().ok() {
                 event!(Level::TRACE, "received {next} for char_device {channel}");
-                if let Some(char_device) = char_devices.get_mut(&channel) {
+                if let Some(CharDevice { buffer: char_device, decoder }) = char_devices.get_mut(&channel) {
                     char_device[0] = next;
 
                     // channel 0 is the input_buffer
@@ -257,7 +260,7 @@ impl Extension for Shell {
                 }
             }
 
-            for (_, char_device) in self.char_devices.iter() {
+            for (_, CharDevice { buffer: char_device, decoder }) in self.char_devices.iter_mut() {
                 for keycode in decoder.write(char_device[0]) {
                     glyph_brush.queue(Section {
                         screen_position: (30.0, 30.0),
