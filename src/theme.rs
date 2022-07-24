@@ -16,6 +16,7 @@ pub enum Token {
     Literal,
     Comment,
     Whitespace,
+    Custom(String),
 }
 
 /// Parser that can convert a source into theming tokens
@@ -71,7 +72,7 @@ where
                         "comment" => Token::Comment,
                         "whitespace" => Token::Whitespace,
                         "keyword" => Token::Keyword,
-                        _ => Token::Whitespace,
+                        custom => Token::Custom(custom.to_string()),
                     }, color);
                 },
                 _ => {}
@@ -158,11 +159,12 @@ mod test {
 test      abc 
 {
 // test
-.
+. custom
 }
 "#;
         let mut theme = crate::Theme::<TestGrammer>::new(source);
         theme.set_color(Token::Bracket, [1.0, 0.0, 0.0, 1.0]);
+        theme.set_color(Token::Custom("custom".to_string()), [1.0, 1.0, 0.0, 1.0]);
 
         let tokens = theme.parse();
 
@@ -184,6 +186,8 @@ test      abc
         TestModifier((Span, Span)),
         #[token("//", on_comment)]
         TestComment(()),
+        #[token("custom")]
+        TestCustom,
         #[error]
         #[regex(r"[ \t\n\f]+", logos::skip)]
         Error,
@@ -201,6 +205,7 @@ test      abc
                     vec![(Token::Comment, None)]
                 }
                 TestGrammer::Error => vec![(Token::Whitespace, None)],
+                TestGrammer::TestCustom => vec![(Token::Custom("custom".to_string()), None)]
             }
         }
     }

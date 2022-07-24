@@ -2,10 +2,12 @@ use lifec::{combine_default, App, System, editor::RuntimeEditor};
 use lifec_shell::Shell;
 
 fn main() {
+    let extension = combine_default::<RuntimeEditor, Shell>();
+
     lifec::open(
         "basic example", 
         Empty{}, 
-        combine_default::<RuntimeEditor, Shell>(),
+        extension,
     )
 }
 
