@@ -16,6 +16,9 @@ mod theme;
 pub use theme::Theme;
 pub use theme::Token;
 
+mod runmd;
+pub use runmd::Runmd;
+
 /// Shell extension for the lifec runtime
 #[derive(Default)]
 pub struct Shell<Theme = DefaultTheme> {

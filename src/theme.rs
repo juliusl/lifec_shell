@@ -19,13 +19,19 @@ pub enum Token {
     Custom(String),
 }
 
+/// Type alias for a theme token 
+pub type ThemeToken = (Token, Option<Range<usize>>);
+
 /// Parser that can convert a source into theming tokens
 pub struct Theme<'a, Grammer>
 where
-    Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<(Token, Option<Range<usize>>)>>,
+    Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<ThemeToken>>,
 {
     /// Lexer for finding token positions
     lexer: Option<Lexer<'a, Grammer>>,
+
+    /// Thunk context
+    context: Option<ThunkContext>,
 
     /// Source used to create the lexer
     source: &'a str, 
@@ -41,12 +47,13 @@ where
 
 impl<'a, Grammer> Theme<'a, Grammer>
 where
-    Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<(Token, Option<Range<usize>>)>>,
+    Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<ThemeToken>>,
 {
     /// Returns an instance of this theme for a given source
     pub fn new(source: &'a str) -> Self {
         Self {
             lexer: Some(Grammer::lexer(source)),
+            context: None,
             source,
             tokens: vec![],
             color_map: Default::default(),
@@ -82,6 +89,7 @@ where
 
         Self {
             lexer,
+            context: None,
             source,
             tokens: vec![],
             color_map,
@@ -96,7 +104,7 @@ where
     /// Parses tokens produced by the lexer into tokens used for theming
     /// 
     /// If this theme has already been parsed, this is a no op
-    pub fn parse(&mut self) -> Vec<(Token, Range<usize>)> {
+    pub fn parse(&mut self) -> Option<(Vec<(Token, Range<usize>)>, ThunkContext)> {
         let mut parsed = vec![];
         if let Some(mut lexer) = self.lexer.take() {
             while let Some(token) = lexer.next() {
@@ -112,9 +120,15 @@ where
             }
 
             self.tokens = parsed.to_vec();
-            parsed
+            self.context = Some(lexer.extras);
+
+        }
+
+        if let Some(context) = self.context.as_ref() {
+            eprintln!("{:#?}", context.as_ref());
+            Some((self.tokens.to_vec(), context.clone()))
         } else {
-            self.tokens.to_vec()
+            None 
         }
     }
 
@@ -122,25 +136,18 @@ where
     pub fn render(&mut self) -> Vec<Text<'a>> {
         let mut texts = vec![];
 
-        for (token, span) in self.parse() {
-            let mut text = Text::new(&self.source[span]);
+        if let Some((tokens, _)) = self.parse() {
+            for (token, span) in tokens {
+                let mut text = Text::new(&self.source[span]);
 
-            if let Some(color) = self.color_map.get(&token) {
-                text = text.with_color(*color);
+                if let Some(color) = self.color_map.get(&token) {
+                    text = text.with_color(*color);
+                }
+    
+                texts.push(text);
             }
-
-            texts.push(text);
         }
         texts
-    }
-
-    /// Returns the thunk context if this was created with new_with
-    pub fn thunk_context(&self) -> Option<ThunkContext> {
-        if let Some(lexer) = &self.lexer {
-            Some(lexer.extras.clone())
-        } else {
-            None
-        }
     }
 }
 
@@ -166,12 +173,13 @@ test      abc
         theme.set_color(Token::Bracket, [1.0, 0.0, 0.0, 1.0]);
         theme.set_color(Token::Custom("custom".to_string()), [1.0, 1.0, 0.0, 1.0]);
 
-        let tokens = theme.parse();
-
-        eprintln!("{:#?}", tokens);
-        for (token, span) in tokens {
-            eprintln!("{:?} {}", token, &source[span]);
+        if let Some((tokens, _)) = theme.parse() {
+            eprintln!("{:#?}", tokens);
+            for (token, span) in tokens {
+                eprintln!("{:?} {}", token, &source[span]);
+            }
         }
+
     }
 
     #[derive(Logos, PartialEq, Eq)]
