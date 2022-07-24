@@ -125,7 +125,6 @@ where
         }
 
         if let Some(context) = self.context.as_ref() {
-            eprintln!("{:#?}", context.as_ref());
             Some((self.tokens.to_vec(), context.clone()))
         } else {
             None 

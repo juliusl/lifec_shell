@@ -30,8 +30,7 @@ pub enum Runmd {
     #[token("define", on_block_event)]
     BlockEvent(Vec<Span>),
     /// Attribute values
-    #[token(".text", on_attribute_value)]
-    #[token(".float", on_attribute_value)]
+    #[token(".", on_attribute_value)]
     AttributeValue((Span, Span)),
     /// Coments in runmd
     #[token("``` md", on_comment)]
@@ -94,8 +93,12 @@ impl Into<Vec<ThemeToken>> for Runmd {
                     (Token::Literal, Some(literal_span))
                 ]
             },
-            Runmd::Comment => todo!(),
-            Runmd::Error => todo!(),
+            Runmd::Comment => {
+                vec![]
+            },
+            Runmd::Error => {
+                vec![]
+            },
         }
     }
 }
@@ -203,7 +206,34 @@ fn on_attribute_value(lexer: &mut Lexer<Runmd>) -> Option<(Span, Span)> {
     if let Some(eol) = lexer.remainder().find(|c| c == '\r' || c == '\n') {
         let line = &lexer.remainder()[..eol];
         lexer.bump(line.len());
-        Some((type_span.clone(), Span { start: type_span.end + 1, end: lexer.span().end })) 
+        let value = &lexer.source()[type_span.start..type_span.end + eol];
+        let mut value_type = AttributeGraphElements::lexer(value);
+        match value_type.next() {
+            Some(element) => {
+                match element {
+                    AttributeGraphElements::Text(_)
+                    | AttributeGraphElements::Bool(_)
+                    | AttributeGraphElements::Int(_)
+                    | AttributeGraphElements::IntPair(_)
+                    | AttributeGraphElements::IntRange(_)
+                    | AttributeGraphElements::Float(_)
+                    | AttributeGraphElements::FloatPair(_)
+                    | AttributeGraphElements::FloatRange(_)
+                    | AttributeGraphElements::BinaryVector(_)
+                    | AttributeGraphElements::SymbolValue(_) => {
+                        let value_type_span = value_type.span();
+
+                        Some((
+                            Span { start: type_span.start, end: type_span.end + value_type_span.end }, 
+                            Span { start: type_span.end + value_type_span.end, end: type_span.end + eol }))
+                    },
+                    _ => {
+                        None
+                    }
+                }
+            },
+            _ => None,
+        }
     } else {
         None
     }
@@ -300,30 +330,20 @@ add test_val .text test hello world
 define test_val test .text test hello world
 ``` println
 add label .text test label
+add duration .int2 5, 6
 ```
 "#;
 
     // Test lexer
     let mut lexer = Runmd::lexer_with_extras(runmd, ThunkContext::default());
-
     let token = lexer.next();
     assert_eq!(token, Some(Runmd::BlockDelimitter(vec![(1..5), (5..9), (10..17)])));
-
     let token = lexer.next();
-    eprintln!("{:?} {}", token, &lexer.source()[4..13]);
     assert_eq!(token, Some(Runmd::BlockEvent(vec![(18..21), (21..31)])));
-
+    let _ = lexer.next();
     let token = lexer.next();
-    eprintln!("{:?} {}", token, &lexer.slice());
-
-
-    let token = lexer.next();
-    eprintln!("{:?} {}", token, &lexer.slice());
     assert_eq!(token, Some(Runmd::BlockEvent(vec![(54..60), (61..70), (70..75)])));
-
     let token = lexer.next();
-    eprintln!("{:?} {}", token, &lexer.slice());
-
     if let Some(Runmd::AttributeValue((_, value_span))) = token.clone() {
         eprintln!("{:?} {}", token, &lexer.source()[value_span]);
     }
@@ -332,17 +352,11 @@ add label .text test label
     let tc = ThunkContext::default();
     let mut theme = crate::Theme::<Runmd>::new_with(runmd, tc);
     if let Some((tokens, tc)) = theme.parse() {
-        eprintln!("{:#?}, {:#?}", tokens, tc.as_ref());
-
         for (token, span) in tokens {
             eprintln!("{:?} {}", token, &runmd[span]);
         }
 
         let project = lifec::plugins::Project::from(tc.as_ref().clone());
-        let demo_block = project.find_block("demo").unwrap(); 
-        
-        
-        eprintln!("{:#?}", demo_block.get_block("process").unwrap());        
-        eprintln!("{:#?}", demo_block.get_block("println").unwrap());
+        let _ = project.find_block("demo").unwrap(); 
     }
 }
