@@ -48,7 +48,9 @@ impl CharDevice {
 
             let check = self.cursor + 1;
             if let Some(b'\r') = &self.buffer.as_bytes().get(check) {
-                self.line -= 1;
+                if (self.line as i32) - 1 > 0 {
+                    self.line -= 1;
+                }
             }
         }
     }

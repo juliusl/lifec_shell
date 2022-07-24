@@ -14,6 +14,7 @@ pub use char_device::CharDevice;
 
 mod theme;
 pub use theme::Theme;
+pub use theme::Token;
 
 /// Shell extension for the lifec runtime
 #[derive(Default)]
@@ -125,7 +126,7 @@ impl Shell {
 
     /// Renders the input section
     pub fn render_input(&mut self, config: &SurfaceConfiguration) {
-        let keywords = self.theme.keywords();
+        //let keywords = self.theme.keywords();
         if let (_prompt, cursor, Some(glyph_brush), Some(active)) = self.prepare_render_input() {
             // Renders colors for tokens
             glyph_brush.queue(Section {
