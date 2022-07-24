@@ -12,6 +12,9 @@ use winit::event::ElementState;
 mod char_device;
 pub use char_device::CharDevice;
 
+mod theme;
+pub use theme::Theme;
+
 /// Shell extension for the lifec runtime
 #[derive(Default)]
 pub struct Shell<Theme = DefaultTheme> {
@@ -164,24 +167,24 @@ impl Shell {
                 },
             });
 
-            for (keyword, color) in keywords {
-                // Renders keywords
-                glyph_brush.queue(Section {
-                    screen_position: (90.0, 180.0),
-                    bounds: (config.width as f32 / 2.0, config.height as f32),
-                    text: {
-                        vec![Text::new(active.output_keyword_only(keyword).as_ref())
-                            .with_color(color)
-                            .with_scale(40.0)
-                            .with_z(0.8)]
-                    },
-                    layout: Layout::Wrap {
-                        line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
-                        h_align: HorizontalAlign::Left,
-                        v_align: VerticalAlign::Top,
-                    },
-                });
-            }
+            // for (keyword, color) in keywords {
+            //     // Renders keywords
+            //     glyph_brush.queue(Section {
+            //         screen_position: (90.0, 180.0),
+            //         bounds: (config.width as f32 / 2.0, config.height as f32),
+            //         text: {
+            //             vec![Text::new(active.output_keyword_only(keyword).as_ref())
+            //                 .with_color(color)
+            //                 .with_scale(40.0)
+            //                 .with_z(0.8)]
+            //         },
+            //         layout: Layout::Wrap {
+            //             line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
+            //             h_align: HorizontalAlign::Left,
+            //             v_align: VerticalAlign::Top,
+            //         },
+            //     });
+            // }
 
             // Renders the cursor
             glyph_brush.queue(Section {
