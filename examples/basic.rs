@@ -1,11 +1,11 @@
-use lifec::{App, System};
+use lifec::{combine_default, App, System, editor::RuntimeEditor};
 use lifec_shell::Shell;
 
 fn main() {
     lifec::open(
         "basic example", 
         Empty{}, 
-        Shell::default(),
+        combine_default::<RuntimeEditor, Shell>(),
     )
 }
 
