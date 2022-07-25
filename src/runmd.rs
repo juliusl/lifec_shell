@@ -30,6 +30,9 @@ pub enum Runmd {
     #[token("define", on_block_event)]
     BlockEvent(Vec<Span>),
     /// Attribute values
+    /// ex: .text hello world
+    ///     .int  5
+    ///     .int2 5, 7
     #[token(".", on_attribute_value)]
     AttributeValue((Span, Span)),
     /// Coments in runmd
