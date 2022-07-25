@@ -108,6 +108,7 @@ impl Theme {
             }
         }
 
+        // Appending this to the end ensures that text currently being typed shows up
         parsed.push((Token::Whitespace, Span { start: cursor, end: source.len()}));
         (parsed.to_vec(), lexer.extras.clone())
     }
