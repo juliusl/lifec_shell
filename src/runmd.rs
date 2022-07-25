@@ -59,6 +59,7 @@ impl Into<Vec<ThemeToken>> for Runmd {
                     address.push((Token::Bracket, Some(delimitters.clone()))); 
                 }
 
+                // New block address
                 if tokens.len()  == 3 {
                     if let Some(ident) = tokens.get(1) {
                         address.push((Token::Identifier, Some(ident.clone()))); 
@@ -67,6 +68,7 @@ impl Into<Vec<ThemeToken>> for Runmd {
                     if let Some(symbol) = tokens.get(2) {
                         address.push((Token::Keyword, Some(symbol.clone()))); 
                     }
+                // Declaring symbol on an existing block
                 } else if tokens.len() == 2 {
                     if let Some(symbol) = tokens.get(1) {
                         address.push((Token::Keyword, Some(symbol.clone()))); 
@@ -86,7 +88,7 @@ impl Into<Vec<ThemeToken>> for Runmd {
                     tokens.push((Token::Identifier, Some(ident.clone()))); 
                 }
 
-
+                // The `define` event has an additional keyword for the symbol
                 if let Some(symbol) = spans.get(2) {
                     tokens.push((Token::Keyword, Some(symbol.clone()))); 
                 }
