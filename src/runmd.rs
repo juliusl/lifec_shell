@@ -8,7 +8,6 @@ use logos::Span;
 use tracing::Level;
 use tracing::event;
 
-use crate::DefaultTheme;
 use crate::Token;
 use crate::theme::ThemeToken;
 
@@ -358,8 +357,7 @@ add duration .int2 5, 6
     }
 
     // Test graph creation w/ lexer
-    let tc = ThunkContext::default();
-    let theme = crate::Theme::new_with::<DefaultTheme>(tc);
+    let theme = crate::Theme::new();
      let (tokens, tc) = theme.parse::<Runmd>(runmd);
         for (token, span) in tokens {
             eprintln!("{:?} {}", token, &runmd[span]);

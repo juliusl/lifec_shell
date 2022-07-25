@@ -1,5 +1,5 @@
 use logos::{Logos, Span};
-use std::{collections::HashMap, ops::Range};
+use std::{collections::BTreeMap, ops::Range};
 use wgpu_glyph::Text;
 use lifec::plugins::ThunkContext;
 
@@ -7,7 +7,7 @@ use crate::{ColorTheme, DefaultTheme};
 
 /// Generic tokens that can be used to support colorization directly
 /// from a Logos lexer
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Token {
     Keyword,
     Bracket,
@@ -26,23 +26,36 @@ pub type ThemeToken = (Token, Option<Range<usize>>);
 
 #[derive(Default)]
 /// Parser that can convert a source into theming tokens
-pub struct Theme {
+pub struct Theme<Style = DefaultTheme> 
+where 
+    Style: ColorTheme + Default
+{
     /// Thunk context
     context: ThunkContext,
 
     /// Mapping between token and color -- color values should be linear sRGB
-    color_map: HashMap<Token, [f32; 4]>,
+    color_map: BTreeMap<Token, [f32; 4]>,
+
+    /// Style 
+    _style: Style
 }
 
 impl Theme {
+    pub fn new() -> Self {
+        Theme::new_with(ThunkContext::default())
+    }
+}
+
+impl<Style> Theme<Style> 
+where 
+    Style: ColorTheme + Default
+{
     /// Returns an instance of this theme for a given source, and passes the thunk_context to the lexer
     ///
     /// Parses color symbols to build the color map
-    pub fn new_with<Style>(tc: ThunkContext) -> Self
-    where
-        Style: ColorTheme + Default,
+    pub fn new_with(tc: ThunkContext) -> Self
     {
-        let mut color_map = HashMap::new();
+        let mut color_map = BTreeMap::new();
         for (name, value) in tc.as_ref().find_symbol_values("color") {
             let name = name.trim_end_matches("::color");
             color_map.insert(
@@ -73,15 +86,67 @@ impl Theme {
             );
         }
 
+        color_map.insert(Token::Custom("background".to_string()), Style::background());
+        color_map.insert(Token::Custom("red".to_string()), Style::red());
+        color_map.insert(Token::Custom("green".to_string()), Style::green());
+        color_map.insert(Token::Custom("blue".to_string()), Style::blue());
+        color_map.insert(Token::Custom("purple".to_string()), Style::purple());
+        color_map.insert(Token::Custom("yellow".to_string()), Style::yellow());
+        color_map.insert(Token::Custom("orange".to_string()), Style::orange());
+
         Self {
             context: tc,
             color_map,
+            _style: Style::default(),
         }
     }
 
     /// Set's the color value (linear sRGB) for the token
     pub fn set_color(&mut self, token: Token, color: [f32; 4]) {
         self.color_map.insert(token, color);
+    }
+
+    /// Iterate over current colors for editing
+    pub fn colors_mut(&mut self) -> impl Iterator<Item = (&Token, &mut [f32; 4])>{
+        self.color_map.iter_mut()
+    }
+
+    /// Returns the color for the given token
+    pub fn get_color(&self, token: Token) -> Option<&[f32; 4]> {
+        self.color_map.get(&token)
+    }
+
+    /// Resets the colors to the values set in the current context
+    pub fn reset_colors(&mut self) {
+        for (name, value) in self.context.as_ref().find_symbol_values("color") {
+            let name = name.trim_end_matches("::color");
+            self.color_map.insert(
+                match name {
+                    "bracket" => Token::Bracket,
+                    "operator" => Token::Operator,
+                    "modifier" => Token::Modifier,
+                    "identifier" => Token::Identifier,
+                    "literal" => Token::Literal,
+                    "comment" => Token::Comment,
+                    "whitespace" => Token::Whitespace,
+                    "keyword" => Token::Keyword,
+                    custom => Token::Custom(custom.to_string()),
+                },
+                match value {
+                    lifec::Value::FloatRange(r, g, b) => [r, g, b, 1.0],
+                    lifec::Value::TextBuffer(color_name) => match color_name.as_str() {
+                        "red" => Style::red(),
+                        "green" => Style::green(),
+                        "blue" => Style::blue(),
+                        "purple" => Style::purple(),
+                        "yellow" => Style::yellow(),
+                        "orange" => Style::orange(),
+                        _ => Style::green(),
+                    },
+                    _ => [1.0, 1.0, 1.0, 1.0],
+                },
+            );
+        }
     }
 
     /// Parses tokens produced by the lexer into tokens used for theming
@@ -164,7 +229,7 @@ test      abc
 . custom
 }
 "#;
-        let mut theme = crate::Theme::default();
+        let mut theme = crate::Theme::new();
         theme.set_color(Token::Bracket, [1.0, 0.0, 0.0, 1.0]);
         theme.set_color(Token::Custom("custom".to_string()), [1.0, 1.0, 0.0, 1.0]);
 

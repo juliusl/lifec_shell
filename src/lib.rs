@@ -1,6 +1,9 @@
-use lifec::plugins::ThunkContext;
-use lifec::{Component, DenseVecStorage, Entity, Extension, Join, WorldExt, Value};
+use imgui::ColorEdit;
+use lifec::editor::{Call, RuntimeEditor, Builder};
+use lifec::plugins::{Connection, Remote, Sequence, ThunkContext, Process};
+use lifec::{Component, DenseVecStorage, Entity, Extension, Join, Value, WorldExt};
 use std::collections::BTreeMap;
+use std::ops::DerefMut;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tracing::{event, Level};
 use wgpu::{DepthStencilState, SurfaceConfiguration};
@@ -8,7 +11,6 @@ use wgpu_glyph::{
     ab_glyph, BuiltInLineBreaker, GlyphBrush, GlyphBrushBuilder, HorizontalAlign, Layout, Section,
     Text, VerticalAlign,
 };
-use winit::event::ElementState;
 
 mod char_device;
 pub use char_device::CharDevice;
@@ -24,8 +26,12 @@ mod runmd;
 pub use runmd::Runmd;
 
 /// Shell extension for the lifec runtime
-#[derive(Default)]
-pub struct Shell {
+pub struct Shell<Style = DefaultTheme>
+where
+    Style: ColorTheme + Default,
+{
+    /// runtime editor
+    runtime_editor: RuntimeEditor,
     /// glyph_brush, for rendering fonts
     brush: Option<GlyphBrush<DepthStencilState>>,
     /// byte receiver
@@ -36,8 +42,31 @@ pub struct Shell {
     char_devices: BTreeMap<u32, CharDevice>,
     /// sets the current char_device that can be edited
     editing: Option<u32>,
-    /// theme 
-    theme: Option<Theme>,
+    /// theme
+    theme: Option<Theme<Style>>,
+    /// current_output
+    channel: i32,
+    /// background clear color
+    background: [f32; 4],
+}
+
+impl<Style> Default for Shell<Style>
+where
+    Style: ColorTheme + Default,
+{
+    fn default() -> Self {
+        Self {
+            runtime_editor: Default::default(),
+            brush: Default::default(),
+            byte_rx: Default::default(),
+            byte_tx: Default::default(),
+            char_devices: Default::default(),
+            editing: Default::default(),
+            theme: Default::default(),
+            channel: Default::default(),
+            background: Style::background(),
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -78,9 +107,9 @@ impl ColorTheme for DefaultTheme {
     }
 
     fn background() -> [f32; 4] {
-        [0.02122,  0.02519,  0.03434, 1.0]
+        [0.02122, 0.02519, 0.03434, 1.0]
     }
-    
+
     fn orange() -> [f32; 4] {
         [0.78354, 0.52712, 0.19807, 1.0]
     }
@@ -91,35 +120,47 @@ impl ColorTheme for DefaultTheme {
 #[storage(DenseVecStorage)]
 pub struct ShellChannel(Option<Sender<(u32, u8)>>);
 
-impl Shell {
+impl<Style> Shell<Style>
+where
+    Style: ColorTheme + Default,
+{
+    /// gets the underlying runtime_editor
+    pub fn runtime_editor_mut(&mut self) -> &mut RuntimeEditor {
+        &mut self.runtime_editor
+    }
+
     /// Returns the text brush and char device being edited
     pub fn prepare_render_input(
         &mut self,
     ) -> (
         Option<&mut GlyphBrush<DepthStencilState>>,
         Option<&mut CharDevice>,
-        Option<&mut Theme>,
+        Option<&mut Theme<Style>>,
     ) {
         if let Some(editing) = self.editing {
             if let Some(device) = self.char_devices.get_mut(&editing) {
-                (
-                    self.brush.as_mut(),
-                    Some(device),
-                    self.theme.as_mut(),
-                )
+                (self.brush.as_mut(), Some(device), self.theme.as_mut())
             } else {
-                (
-                    self.brush.as_mut(),
-                    None,
-                    self.theme.as_mut(),
-                )
+                (self.brush.as_mut(), None, self.theme.as_mut())
             }
         } else {
-            (
-                None, 
-                None,
-                self.theme.as_mut(),
-            )
+            (None, None, self.theme.as_mut())
+        }
+    }
+
+    /// Returns the text brush and char device being edited
+    pub fn prepare_render_output(
+        &mut self,
+        channel: u32,
+    ) -> (
+        Option<&mut GlyphBrush<DepthStencilState>>,
+        Option<&mut CharDevice>,
+        Option<&mut Theme<Style>>,
+    ) {
+        if let Some(device) = self.char_devices.get_mut(&channel) {
+            (self.brush.as_mut(), Some(device), self.theme.as_mut())
+        } else {
+            (self.brush.as_mut(), None, self.theme.as_mut())
         }
     }
 
@@ -137,40 +178,18 @@ impl Shell {
 
     /// Renders the input section
     pub fn render_input(&'_ mut self, config: &SurfaceConfiguration) {
-        //let keywords = self.theme.keywords();
         if let (Some(glyph_brush), Some(active), Some(theme)) = self.prepare_render_input() {
-            let output = active.output();
-  
             // Renders the buffer
             glyph_brush.queue(Section {
                 screen_position: (90.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
-                text: theme.render::<Runmd>(output.as_ref()),
+                text: theme.render::<Runmd>(active.output().as_ref()),
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
                     h_align: HorizontalAlign::Left,
                     v_align: VerticalAlign::Top,
                 },
             });
-
-            // for (keyword, color) in keywords {
-            //     // Renders keywords
-            //     glyph_brush.queue(Section {
-            //         screen_position: (90.0, 180.0),
-            //         bounds: (config.width as f32 / 2.0, config.height as f32),
-            //         text: {
-            //             vec![Text::new(active.output_keyword_only(keyword).as_ref())
-            //                 .with_color(color)
-            //                 .with_scale(40.0)
-            //                 .with_z(0.8)]
-            //         },
-            //         layout: Layout::Wrap {
-            //             line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
-            //             h_align: HorizontalAlign::Left,
-            //             v_align: VerticalAlign::Top,
-            //         },
-            //     });
-            // }
 
             // Renders the cursor
             glyph_brush.queue(Section {
@@ -215,8 +234,11 @@ impl Shell {
         }
     }
 
+    /// Renders the currently active channel
     pub fn render_channel(&mut self, config: &SurfaceConfiguration) {
-        if let (Some(glyph_brush), Some(active), Some(theme)) = self.prepare_render_input() {
+        if let (Some(glyph_brush), Some(active), Some(theme)) =
+            self.prepare_render_output(self.channel as u32)
+        {
             glyph_brush.queue(Section {
                 screen_position: ((config.width as f32) / 2.0 + 60.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
@@ -241,6 +263,11 @@ impl Extension for Shell {
             b: 0.03434,
             a: 1.0,
         });
+
+        _world
+            .create_entity()
+            .with(ThunkContext::default())
+            .build();
     }
 
     fn on_window_event(
@@ -254,7 +281,10 @@ impl Extension for Shell {
                     sender.try_send((0, *char as u8)).ok();
                 }
             }
-            (lifec::editor::WindowEvent::KeyboardInput { input, .. }, (.., Some(editing), _theme)) => {
+            (
+                lifec::editor::WindowEvent::KeyboardInput { input, .. },
+                (.., Some(editing), _theme),
+            ) => {
                 match (input.virtual_keycode, input.state) {
                     // TODO: After integrating some parts from gamegamegame, this part can be improved
                     (Some(key), _) => match key {
@@ -318,22 +348,36 @@ impl Extension for Shell {
                 self.editing = Some(0);
             }
             let mut default_context = ThunkContext::default();
-            default_context.as_mut().define("bracket", "color")
+            default_context
+                .as_mut()
+                .define("bracket", "color")
                 .edit_as(Value::TextBuffer("purple".to_string()));
-            default_context.as_mut().define("operator", "color")
+            default_context
+                .as_mut()
+                .define("operator", "color")
                 .edit_as(Value::TextBuffer("yellow".to_string()));
-            default_context.as_mut().define("identifier", "color")
+            default_context
+                .as_mut()
+                .define("identifier", "color")
                 .edit_as(Value::TextBuffer("red".to_string()));
-            default_context.as_mut().define("keyword", "color")
+            default_context
+                .as_mut()
+                .define("keyword", "color")
                 .edit_as(Value::TextBuffer("blue".to_string()));
-            default_context.as_mut().define("literal", "color")
+            default_context
+                .as_mut()
+                .define("literal", "color")
                 .edit_as(Value::TextBuffer("green".to_string()));
-            default_context.as_mut().define("comment", "color")
+            default_context
+                .as_mut()
+                .define("comment", "color")
                 .edit_as(Value::TextBuffer("green".to_string()));
-            default_context.as_mut().define("whitespace", "color")
+            default_context
+                .as_mut()
+                .define("whitespace", "color")
                 .edit_as(Value::TextBuffer("yellow".to_string()));
 
-            self.theme = Some(Theme::new_with::<DefaultTheme>(default_context));
+            self.theme = Some(Theme::new_with(default_context));
         }
     }
 
@@ -392,43 +436,89 @@ impl Extension for Shell {
         }
 
         let mut shell_outputs = app_world.write_component::<ShellChannel>();
+        let mut contexts = app_world.write_component::<ThunkContext>();
         let entities = app_world.entities();
 
-        for (entity, shell_output) in (&entities, &mut shell_outputs).join() {
+        for (entity, shell_output, context) in (&entities, &mut shell_outputs, &mut contexts).join()
+        {
             if let ShellChannel(None) = shell_output {
                 if let Some(channel) = self.add_device(entity) {
                     *shell_output = channel;
                 }
+            } else if let ShellChannel(Some(channel)) = shell_output {
+                context.set_char_device(channel.clone());
             }
         }
     }
+
+    fn on_ui(&'_ mut self, app_world: &lifec::World, ui: &'_ imgui::Ui<'_>) {
+        ui.main_menu_bar(|| {
+            ui.menu("Shell", || {
+                if let Some(theme) = self.theme.as_mut() {
+                    for (token, color) in theme.colors_mut() {
+                        ColorEdit::new(format!("{:?}", token), color).build(ui);
+                    }
+                }
+
+                if ColorEdit::new("Background clear", &mut self.background).build(ui) {
+                    let [r, g, b, a] = self.background;
+                    let mut clear_color = app_world.write_resource::<wgpu::Color>();
+                    let clear_color = clear_color.deref_mut();
+                    *clear_color = wgpu::Color {
+                        r: r.into(),
+                        g: g.into(),
+                        b: b.into(),
+                        a: a.into(),
+                    };
+                }
+
+                if ui.button("Reset colors") {
+                    if let Some(theme) = self.theme.as_mut() {
+                        theme.reset_colors();
+
+                        if let Some(color) =
+                            theme.get_color(Token::Custom("background".to_string()))
+                        {
+                            self.background = *color;
+                            let [r, g, b, a] = self.background;
+                            let mut clear_color = app_world.write_resource::<wgpu::Color>();
+                            let clear_color = clear_color.deref_mut();
+                            *clear_color = wgpu::Color {
+                                r: r.into(),
+                                g: g.into(),
+                                b: b.into(),
+                                a: a.into(),
+                            };
+                        }
+                    }
+                }
+
+                ui.separator();
+                if ui
+                    .input_int("Current output channel", &mut self.channel)
+                    .build()
+                {}
+
+                if ui.button("Add Remote") {
+                    if let Some(created) = self
+                        .runtime_editor
+                        .runtime_mut()
+                        .schedule_with_engine::<Call, Process>(app_world, "shell")
+                    {
+                        if let Some(channel) = self.add_device(created) {
+                            app_world.write_component().insert(created, channel).ok();
+                            app_world
+                                .write_component()
+                                .insert(created, Sequence::default())
+                                .ok();
+                            app_world
+                                .write_component()
+                                .insert(created, Connection::default())
+                                .ok();
+                        }
+                    }
+                }
+            });
+        });
+    }
 }
-
-// for (_, CharDevice { write_buffer: char_device, decoder, buffer: output, .. }) in self.char_devices.iter_mut() {
-//     for keycode in decoder.write(char_device[0]) {
-//         glyph_brush.queue(Section {
-//             screen_position: (30.0, 30.0),
-//             bounds: (config.width as f32, config.height as f32),
-//             text: vec![Text::new(
-//                 format!(
-//                     "code={:?} bytes={:?} printable={:?}",
-//                     keycode,
-//                     keycode.bytes(),
-//                     keycode.printable(),
-//                 ).as_str(),
-//             )
-//             .with_color([1.0, 1.0, 1.0, 1.0])
-//             .with_scale(40.0)],
-//             ..Default::default()
-//         });
-//     }
-
-//     glyph_brush.queue(Section {
-//         screen_position: (200.0, 30.0),
-//         bounds: (config.width as f32, config.height as f32),
-//         text: vec![Text::new(output.as_str())
-//         .with_color([1.0, 1.0, 1.0, 1.0])
-//         .with_scale(40.0)],
-//         ..Default::default()
-//     });
-// }
