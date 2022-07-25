@@ -1,10 +1,9 @@
-use logos::{Lexer, Logos, Span};
+use logos::{Logos, Span};
 use std::{collections::HashMap, ops::Range};
 use wgpu_glyph::Text;
-
 use lifec::plugins::ThunkContext;
 
-use crate::{ColorTheme, DefaultTheme, Runmd};
+use crate::{ColorTheme, DefaultTheme};
 
 /// Generic tokens that can be used to support colorization directly
 /// from a Logos lexer
