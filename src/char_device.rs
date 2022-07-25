@@ -141,59 +141,6 @@ impl CharDevice {
         &self.buffer
     }
 
-    /// Returns the current outpput w/ all alphabetic chars replaced by a space
-    pub fn output_symbols_only(&self) -> impl AsRef<str> + '_ {
-        self.buffer
-            .clone()
-            .chars()
-            .map(|c| {
-                if !char::is_alphanumeric(c) || c == '\r' || c == '\t' {
-                    c.to_string()
-                } else {
-                    " ".to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    /// Returns the current output w/ all non-alphabetic chars replaced by a space
-    pub fn output_alphanumeric_only(&self) -> impl AsRef<str> + '_ {
-        self.buffer
-            .clone()
-            .chars()
-            .map(|c| {
-                if char::is_alphanumeric(c) || c == '\r' || c == '\t' {
-                    c.to_string()
-                } else {
-                    " ".to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    /// Returns the current output w/ all non-alphabetic chars replaced by a space
-    pub fn output_keyword_only(&self, keyword: impl AsRef<str>) -> impl AsRef<str> + '_ {
-        self.output()
-            .as_ref()
-            .split(keyword.as_ref())
-            .map(|a| {
-                a.chars()
-                    .map(|c| {
-                        if c == '\r' || c == '\t' {
-                            c.to_string()
-                        } else {
-                            " ".to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .collect::<Vec<_>>()
-            .join(keyword.as_ref())
-    }
-
     /// Returns the current line nos
     pub fn line_nos(&self) -> impl AsRef<str> + '_ {
         (0..self.line_info.len())
