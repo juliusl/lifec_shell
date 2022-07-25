@@ -148,7 +148,7 @@ where
         }
     }
 
-    /// Returns the text brush and char device being edited
+    /// Returns devices to render output from a chardevice
     pub fn prepare_render_output(
         &mut self,
         channel: u32,
@@ -278,7 +278,9 @@ impl Extension for Shell {
         match (event, self.prepare_render_input()) {
             (lifec::editor::WindowEvent::ReceivedCharacter(char), _) => {
                 if let Some(sender) = &self.byte_tx {
-                    sender.try_send((0, *char as u8)).ok();
+                    if let Some(editing) = self.editing {
+                        sender.try_send((editing as u32, *char as u8)).ok();
+                    }
                 }
             }
             (
