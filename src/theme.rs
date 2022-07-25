@@ -1,8 +1,10 @@
-use logos::{Lexer, Logos};
-use wgpu_glyph::Text;
+use logos::{Lexer, Logos, Span};
 use std::{collections::HashMap, ops::Range};
+use wgpu_glyph::Text;
 
 use lifec::plugins::ThunkContext;
+
+use crate::{ColorTheme, DefaultTheme, Runmd};
 
 /// Generic tokens that can be used to support colorization directly
 /// from a Logos lexer
@@ -16,82 +18,64 @@ pub enum Token {
     Literal,
     Comment,
     Whitespace,
+    Newline,
     Custom(String),
 }
 
-/// Type alias for a theme token 
+/// Type alias for a theme token
 pub type ThemeToken = (Token, Option<Range<usize>>);
 
+#[derive(Default)]
 /// Parser that can convert a source into theming tokens
-pub struct Theme<'a, Grammer>
-where
-    Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<ThemeToken>>,
-{
-    /// Lexer for finding token positions
-    lexer: Option<Lexer<'a, Grammer>>,
-
+pub struct Theme {
     /// Thunk context
-    context: Option<ThunkContext>,
-
-    /// Source used to create the lexer
-    source: &'a str, 
-
-    /// Tokens parsed from lexer, 
-    /// 
-    /// If lexer is Some, then this could be empty
-    tokens: Vec<(Token, Range<usize>)>,
+    context: ThunkContext,
 
     /// Mapping between token and color -- color values should be linear sRGB
     color_map: HashMap<Token, [f32; 4]>,
 }
 
-impl<'a, Grammer> Theme<'a, Grammer>
-where
-    Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<ThemeToken>>,
-{
-    /// Returns an instance of this theme for a given source
-    pub fn new(source: &'a str) -> Self {
-        Self {
-            lexer: Some(Grammer::lexer(source)),
-            context: None,
-            source,
-            tokens: vec![],
-            color_map: Default::default(),
-        }
-    }
-
+impl Theme {
     /// Returns an instance of this theme for a given source, and passes the thunk_context to the lexer
-    /// 
+    ///
     /// Parses color symbols to build the color map
-    pub fn new_with(source: &'a str, tc: ThunkContext) -> Self {
-       let mut color_map = HashMap::new();
-       for (name, value) in tc.as_ref().find_symbol_values("color") {
+    pub fn new_with<Style>(tc: ThunkContext) -> Self
+    where
+        Style: ColorTheme + Default,
+    {
+        let mut color_map = HashMap::new();
+        for (name, value) in tc.as_ref().find_symbol_values("color") {
             let name = name.trim_end_matches("::color");
-            match value {
-                lifec::Value::FloatRange(r, g, b) => {
-                    let color = [r, g, b, 1.0];
-                    color_map.insert(match name {
-                        "bracket" => Token::Bracket,
-                        "operator" => Token::Operator,
-                        "modifier" => Token::Modifier,
-                        "identifier" => Token::Identifier, 
-                        "literal" => Token::Literal,
-                        "comment" => Token::Comment,
-                        "whitespace" => Token::Whitespace,
-                        "keyword" => Token::Keyword,
-                        custom => Token::Custom(custom.to_string()),
-                    }, color);
+            color_map.insert(
+                match name {
+                    "bracket" => Token::Bracket,
+                    "operator" => Token::Operator,
+                    "modifier" => Token::Modifier,
+                    "identifier" => Token::Identifier,
+                    "literal" => Token::Literal,
+                    "comment" => Token::Comment,
+                    "whitespace" => Token::Whitespace,
+                    "keyword" => Token::Keyword,
+                    custom => Token::Custom(custom.to_string()),
                 },
-                _ => {}
-            }
-       }
-       let lexer = Some(Grammer::lexer_with_extras(source, tc));
+                match value {
+                    lifec::Value::FloatRange(r, g, b) => [r, g, b, 1.0],
+                    lifec::Value::TextBuffer(color_name) => match color_name.as_str() {
+                        "red" => Style::red(),
+                        "green" => Style::green(),
+                        "blue" => Style::blue(),
+                        "purple" => Style::purple(),
+                        "yellow" => Style::yellow(),
+                        "orange" => Style::orange(),
+                        _ => Style::green(),
+                    },
+                    _ => [1.0, 1.0, 1.0, 1.0],
+                },
+            );
+        }
 
         Self {
-            lexer,
-            context: None,
-            source,
-            tokens: vec![],
+            context: tc,
             color_map,
         }
     }
@@ -102,50 +86,62 @@ where
     }
 
     /// Parses tokens produced by the lexer into tokens used for theming
-    /// 
+    ///
     /// If this theme has already been parsed, this is a no op
-    pub fn parse(&mut self) -> Option<(Vec<(Token, Range<usize>)>, ThunkContext)> {
+    pub fn parse<'a, Grammer>(&self, source: &'a str) -> (Vec<(Token, Range<usize>)>, ThunkContext)
+    where
+        Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<ThemeToken>>,
+    {
+        let mut lexer = Grammer::lexer_with_extras(source, self.context.clone());
         let mut parsed = vec![];
-        if let Some(mut lexer) = self.lexer.take() {
-            while let Some(token) = lexer.next() {
-                let tokens: Vec<(Token, Option<Range<usize>>)> = token.into();
+        let mut cursor = 0;
+        while let Some(token) = lexer.next() {
+            let tokens: Vec<(Token, Option<Range<usize>>)> = token.into();
 
-                for (token, span) in tokens {
-                    let span = match span {
-                        Some(span) => span,
-                        None => lexer.span(),
-                    };
-                    parsed.push((token, span));
-                }
+            for (token, span) in tokens {
+                let span = match span {
+                    Some(span) => span,
+                    None => lexer.span(),
+                };
+                cursor = span.end;
+                parsed.push((token, span));
             }
-
-            self.tokens = parsed.to_vec();
-            self.context = Some(lexer.extras);
-
         }
 
-        if let Some(context) = self.context.as_ref() {
-            Some((self.tokens.to_vec(), context.clone()))
-        } else {
-            None 
-        }
+        parsed.push((Token::Whitespace, Span { start: cursor, end: source.len()}));
+        (parsed.to_vec(), lexer.extras.clone())
     }
 
     /// Renders a vector of texts to render/layout
-    pub fn render(&mut self) -> Vec<Text<'a>> {
+    pub fn render<'a, Grammer>(&self, source: &'a str) -> Vec<Text<'a>>
+    where
+        Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<ThemeToken>>,
+    {
+        let mut cursor = 0;
         let mut texts = vec![];
+        let (tokens, _) = self.parse::<Grammer>(&source);
 
-        if let Some((tokens, _)) = self.parse() {
-            for (token, span) in tokens {
-                let mut text = Text::new(&self.source[span]);
+        for (token, span) in tokens {
+            // Render everything between the cursor and the start of this span
+            texts.push(
+                Text::new(&source[cursor..span.start])
+                    .with_color([1.0, 1.0, 1.0, 0.8])
+                    .with_scale(40.0)
+                    .with_z(0.8),
+            );
+            cursor = span.end;
 
+            if span.start < span.end {
+                let mut text = Text::new(&source[span]).with_scale(40.0).with_z(0.8);
                 if let Some(color) = self.color_map.get(&token) {
                     text = text.with_color(*color);
+                } else {
+                    text = text.with_color(DefaultTheme::green());
                 }
-    
                 texts.push(text);
             }
         }
+
         texts
     }
 }
@@ -153,11 +149,11 @@ where
 mod test {
     use std::ops::Range;
 
+    use crate::Token;
+    use lifec::plugins::ThunkContext;
     use logos::Lexer;
     use logos::Logos;
     use logos::Span;
-    use crate::Token;
-    use lifec::plugins::ThunkContext;
 
     #[test]
     fn test_theme() {
@@ -168,17 +164,15 @@ test      abc
 . custom
 }
 "#;
-        let mut theme = crate::Theme::<TestGrammer>::new(source);
+        let mut theme = crate::Theme::default();
         theme.set_color(Token::Bracket, [1.0, 0.0, 0.0, 1.0]);
         theme.set_color(Token::Custom("custom".to_string()), [1.0, 1.0, 0.0, 1.0]);
 
-        if let Some((tokens, _)) = theme.parse() {
-            eprintln!("{:#?}", tokens);
-            for (token, span) in tokens {
-                eprintln!("{:?} {}", token, &source[span]);
-            }
+        let (tokens, _) = theme.parse::<TestGrammer>(source);
+        eprintln!("{:#?}", tokens);
+        for (token, span) in tokens {
+            eprintln!("{:?} {}", token, &source[span]);
         }
-
     }
 
     #[derive(Logos, PartialEq, Eq)]
@@ -206,29 +200,35 @@ test      abc
                 TestGrammer::TestBracket => vec![(Token::Bracket, None)],
                 TestGrammer::TestOperator => vec![(Token::Operator, None)],
                 TestGrammer::TestModifier((modifier, ident)) => {
-                    vec![(Token::Modifier, Some(modifier)), (Token::Identifier, Some(ident))]
-                },
+                    vec![
+                        (Token::Modifier, Some(modifier)),
+                        (Token::Identifier, Some(ident)),
+                    ]
+                }
                 TestGrammer::TestComment(_) => {
                     vec![(Token::Comment, None)]
                 }
                 TestGrammer::Error => vec![(Token::Whitespace, None)],
-                TestGrammer::TestCustom => vec![(Token::Custom("custom".to_string()), None)]
+                TestGrammer::TestCustom => vec![(Token::Custom("custom".to_string()), None)],
             }
         }
     }
 
-    fn on_comment(lexer: &mut Lexer<TestGrammer>) -> Option<()>{
+    fn on_comment(lexer: &mut Lexer<TestGrammer>) -> Option<()> {
         if let Some(eol) = lexer.remainder().find(|c| c == '\r' || c == '\n') {
             let line = &lexer.remainder()[..eol];
             lexer.bump(line.len());
-            Some(()) 
+            Some(())
         } else {
             None
         }
     }
 
     fn on_modifier(lexer: &mut Lexer<TestGrammer>) -> Option<(Span, Span)> {
-        if let Some(eol) = lexer.remainder().find(|c| c == '\r' || c == '\n' || c == '{' ) {
+        if let Some(eol) = lexer
+            .remainder()
+            .find(|c| c == '\r' || c == '\n' || c == '{')
+        {
             let line = &lexer.remainder()[..eol];
             let modifier = lexer.span();
             lexer.bump(line.len());

@@ -8,6 +8,7 @@ use logos::Span;
 use tracing::Level;
 use tracing::event;
 
+use crate::DefaultTheme;
 use crate::Token;
 use crate::theme::ThemeToken;
 
@@ -41,6 +42,12 @@ pub enum Runmd {
     #[regex(r"[ \t\n\f]+", logos::skip)]
     #[error]
     Error,
+}
+
+impl Default for Runmd {
+    fn default() -> Self {
+        Self::Error
+    }
 }
 
 impl Into<Vec<ThemeToken>> for Runmd {
@@ -94,7 +101,9 @@ impl Into<Vec<ThemeToken>> for Runmd {
                 ]
             },
             Runmd::Comment => {
-                vec![]
+                vec![
+                    (Token::Comment, None)
+                ]
             },
             Runmd::Error => {
                 vec![]
@@ -350,13 +359,12 @@ add duration .int2 5, 6
 
     // Test graph creation w/ lexer
     let tc = ThunkContext::default();
-    let mut theme = crate::Theme::<Runmd>::new_with(runmd, tc);
-    if let Some((tokens, tc)) = theme.parse() {
+    let theme = crate::Theme::new_with::<DefaultTheme>(tc);
+     let (tokens, tc) = theme.parse::<Runmd>(runmd);
         for (token, span) in tokens {
             eprintln!("{:?} {}", token, &runmd[span]);
         }
 
         let project = lifec::plugins::Project::from(tc.as_ref().clone());
         let _ = project.find_block("demo").unwrap(); 
-    }
 }
