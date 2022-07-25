@@ -349,6 +349,8 @@ impl Extension for Shell {
                 self.char_devices.insert(0, CharDevice::default());
                 self.editing = Some(0);
             }
+
+            // TODO: This is a temp setting
             let mut default_context = ThunkContext::default();
             default_context
                 .as_mut()
