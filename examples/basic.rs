@@ -1,4 +1,4 @@
-use lifec::{combine_default, App, System, editor::RuntimeEditor, plugins::{Config, Remote, Plugin, Process}};
+use lifec::{combine_default, App, System, editor::RuntimeEditor, plugins::{Config, Plugin, Process}};
 use lifec_shell::Shell;
 
 fn main() {

@@ -1,6 +1,6 @@
 use imgui::ColorEdit;
 use lifec::editor::{Call, RuntimeEditor, Builder};
-use lifec::plugins::{Connection, Remote, Sequence, ThunkContext, Process};
+use lifec::plugins::{Connection, Sequence, ThunkContext, Process};
 use lifec::{Component, DenseVecStorage, Entity, Extension, Join, Value, WorldExt};
 use std::collections::BTreeMap;
 use std::ops::DerefMut;
@@ -432,6 +432,8 @@ impl Extension for Shell {
                 if let Some(char_device) = self.char_devices.get_mut(&channel) {
                     char_device.write(next);
                 }
+
+                self.channel = channel as i32;
             }
         }
 
@@ -503,7 +505,7 @@ impl Extension for Shell {
                     if let Some(created) = self
                         .runtime_editor
                         .runtime_mut()
-                        .schedule_with_engine::<Call, Process>(app_world, "shell")
+                        .create_event::<Call, Process>(app_world, "shell")
                     {
                         if let Some(channel) = self.add_device(created) {
                             app_world.write_component().insert(created, channel).ok();
