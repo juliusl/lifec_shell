@@ -152,12 +152,14 @@ fn on_block_event(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
                             Some((AttributeGraphElements::Symbol(attribute_name), _)),
                             Some((value, value_span))
                       )  = (spanned.next(), spanned.next()) {
-                        let value = get_value(value);
-                        lexer.extras.as_mut().with(&attribute_name, value.clone());
-                        event!(Level::TRACE, "Add event, {attribute_name}, {:?}", value);
-                        tokens.push(Span { start: event_span.end, end: event_span.end + value_span.start });
-                        lexer.bump(value_span.start);
-
+                        if let Some(value) = get_value(value) {
+                            lexer.extras.as_mut().with(&attribute_name, value.clone());
+                            event!(Level::TRACE, "Add event, {attribute_name}, {:?}", value);
+                            tokens.push(Span { start: event_span.end, end: event_span.end + value_span.start });
+                            lexer.bump(value_span.start);
+                        } else {
+                            event!(Level::WARN, "Could not parse value to add event");
+                        }
                     }
                 },
     
@@ -180,11 +182,12 @@ fn on_block_event(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
                         lexer.bump(end);
                         tokens.push(Span { start: start + event_span.end, end: end + event_span.end + 1 });
 
+                        let transient = lexer.extras.as_mut()
+                            .define(&attribute_name, &symbol_name);
 
-                        let value = get_value(value);
-                        lexer.extras.as_mut()
-                            .define(&attribute_name, &symbol_name)
-                            .edit_as(value.clone());
+                        if let Some(value) = get_value(value) {
+                            transient.edit_as(value.clone());
+                        }
                     }
                 },
     
@@ -314,7 +317,7 @@ fn on_block_delimitter(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
     }
 }
 
-fn get_value(element: AttributeGraphElements) -> Value {
+fn get_value(element: AttributeGraphElements) -> Option<Value> {
     match element {
         AttributeGraphElements::Text(value)
         | AttributeGraphElements::Bool(value)
@@ -326,10 +329,11 @@ fn get_value(element: AttributeGraphElements) -> Value {
         | AttributeGraphElements::FloatRange(value)
         | AttributeGraphElements::BinaryVector(value)
         | AttributeGraphElements::SymbolValue(value) => {
-            value
+            Some(value)
         },
+        | AttributeGraphElements::Empty => Some(Value::Empty),
         _ => {
-            Value::Empty
+            None
         }
     }
 }
