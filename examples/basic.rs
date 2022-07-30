@@ -1,16 +1,22 @@
-use lifec::{combine_default, App, System, editor::RuntimeEditor, plugins::{Config, Plugin, Process}};
+use lifec::{combine_default, App, System, editor::RuntimeEditor, plugins::{Config, Plugin, Process, Remote}};
 use lifec_shell::Shell;
 
 fn main() {
+    tracing_subscriber::fmt::Subscriber::builder()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .compact()
+        .init();
+
     let mut extension = combine_default::<RuntimeEditor, Shell>();
 
     extension.1.runtime_editor_mut().runtime_mut().add_config(Config("shell", |a| {
         a.block.block_name = a.label("new_remote").as_ref().to_string();
         a.as_mut()
         .with_text("node_title", "Remote sh")
-        .with_text("thunk_symbol", Process::symbol())
+        .with_text("thunk_symbol", Remote::symbol())
         .with_bool("default_open", true)
-        .with_text("command", "cargo update");
+        .with_bool("enable_listener", true)
+        .with_text("command", "zsh");
     }));
 
     lifec::open(

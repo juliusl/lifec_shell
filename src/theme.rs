@@ -1,9 +1,9 @@
+use lifec::plugins::ThunkContext;
 use logos::{Logos, Span};
 use std::{collections::BTreeMap, ops::Range};
 use wgpu_glyph::Text;
-use lifec::plugins::ThunkContext;
 
-use crate::{ColorTheme, DefaultTheme};
+use crate::{ColorTheme, DefaultTheme, CharDevice};
 
 /// Generic tokens that can be used to support colorization directly
 /// from a Logos lexer
@@ -26,9 +26,9 @@ pub type ThemeToken = (Token, Option<Range<usize>>);
 
 #[derive(Default)]
 /// Parser that can convert a source into theming tokens
-pub struct Theme<Style = DefaultTheme> 
-where 
-    Style: ColorTheme + Default
+pub struct Theme<Style = DefaultTheme>
+where
+    Style: ColorTheme + Default,
 {
     /// Thunk context
     context: ThunkContext,
@@ -36,8 +36,8 @@ where
     /// Mapping between token and color -- color values should be linear sRGB
     color_map: BTreeMap<Token, [f32; 4]>,
 
-    /// Style 
-    _style: Style
+    /// Style
+    _style: Style,
 }
 
 impl Theme {
@@ -46,15 +46,14 @@ impl Theme {
     }
 }
 
-impl<Style> Theme<Style> 
-where 
-    Style: ColorTheme + Default
+impl<Style> Theme<Style>
+where
+    Style: ColorTheme + Default,
 {
     /// Returns an instance of this theme for a given source, and passes the thunk_context to the lexer
     ///
     /// Parses color symbols to build the color map
-    pub fn new_with(tc: ThunkContext) -> Self
-    {
+    pub fn new_with(tc: ThunkContext) -> Self {
         let mut color_map = BTreeMap::new();
         for (name, value) in tc.as_ref().find_symbol_values("color") {
             let name = name.trim_end_matches("::color");
@@ -107,7 +106,7 @@ where
     }
 
     /// Iterate over current colors for editing
-    pub fn colors_mut(&mut self) -> impl Iterator<Item = (&Token, &mut [f32; 4])>{
+    pub fn colors_mut(&mut self) -> impl Iterator<Item = (&Token, &mut [f32; 4])> {
         self.color_map.iter_mut()
     }
 
@@ -173,18 +172,28 @@ where
         }
 
         // Appending this to the end ensures that text currently being typed shows up
-        parsed.push((Token::Whitespace, Span { start: cursor, end: source.len()}));
+        parsed.push((
+            Token::Whitespace,
+            Span {
+                start: cursor,
+                end: source.len(),
+            },
+        ));
         (parsed.to_vec(), lexer.extras.clone())
     }
 
     /// Renders a vector of texts to render/layout
-    pub fn render<'a, Grammer>(&self, source: &'a str) -> Vec<Text<'a>>
+    pub fn render<'a, Grammer>(&self, source: &'a str, prompt_enabled: bool) -> Vec<Text<'a>>
     where
         Grammer: Logos<'a, Source = str, Extras = ThunkContext> + Into<Vec<ThemeToken>>,
     {
         let mut cursor = 0;
         let mut texts = vec![];
         let (tokens, _) = self.parse::<Grammer>(&source);
+
+        if prompt_enabled {
+            texts.push(Style::prompt());
+        }
 
         for (token, span) in tokens {
             // Render everything between the cursor and the start of this span
@@ -208,6 +217,44 @@ where
         }
 
         texts
+    }
+
+    pub fn render_cursor<'a>(&self, prompt_enabled: bool) -> impl FnOnce(&'a str, &'a str) -> Vec<Text<'a>> { 
+        if prompt_enabled {
+           |before, after| {  vec![
+                Style::prompt(),
+                Text::new(before)
+                    .with_color([0.0, 0.0, 0.0, 0.0])
+                    .with_scale(40.0)
+                    .with_z(0.2),
+                Text::new("_")
+                    .with_color([0.4, 0.8, 0.8, 1.0])
+                    .with_scale(40.0)
+                    .with_z(0.2),
+                Text::new(after)
+                    .with_color([0.0, 0.0, 0.0, 0.0])
+                    .with_scale(40.0)
+                    .with_z(0.2),
+            ]
+           }
+        } else {
+            |before, after| {  vec![
+                Text::new(before)
+                    .with_color([0.0, 0.0, 0.0, 0.0])
+                    .with_scale(40.0)
+                    .with_z(0.2),
+                Text::new("_")
+                    .with_color([0.4, 0.8, 0.8, 1.0])
+                    .with_scale(40.0)
+                    .with_z(0.2),
+                Text::new(after)
+                    .with_color([0.0, 0.0, 0.0, 0.0])
+                    .with_scale(40.0)
+                    .with_z(0.2),
+            ]
+           }
+        }
+     
     }
 }
 

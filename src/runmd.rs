@@ -156,10 +156,10 @@ fn on_block_event(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
                             lexer.extras.as_mut().with(&attribute_name, value.clone());
                             event!(Level::TRACE, "Add event, {attribute_name}, {:?}", value);
                             tokens.push(Span { start: event_span.end, end: event_span.end + value_span.start });
-                            lexer.bump(value_span.start);
                         } else {
-                            event!(Level::WARN, "Could not parse value to add event");
+                            event!(Level::WARN, "Could not parse value to add event");     
                         }
+                        lexer.bump(value_span.start);
                     }
                 },
     

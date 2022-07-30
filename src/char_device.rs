@@ -1,6 +1,13 @@
+use std::io::Cursor;
+use std::time::Duration;
+
 use lifec::Component;
 use lifec::HashMapStorage;
 use terminal_keycode::{Decoder, KeyCode};
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufWriter;
+use tokio::net::TcpStream;
 
 #[derive(Component, Default)]
 #[storage(HashMapStorage)]
@@ -20,8 +27,15 @@ pub struct CharDevice {
 }
 
 impl CharDevice {
+    /// Returns a read_only cursor for the current state of the buffer
+    /// 
+    /// Not meant for polling for changes, but to make it more convenient for reading the current state of the device
+    pub fn readonly_cursor(&self) -> impl AsyncRead {
+        Cursor::new(self.buffer.as_bytes().to_vec())
+    }
+
     /// Returns the number of lines in the buffer
-    pub fn lines(&self) -> usize {
+    pub fn line_count(&self) -> usize {
         self.line_info.len()
     }
 
@@ -77,7 +91,7 @@ impl CharDevice {
     /// Writes the next character to the decoder, and internal buffer
     ///
     /// Updates internal counters
-    pub fn write(&mut self, next: u8) {
+    pub fn write_char(&mut self, next: u8) {
         for keycode in self.decoder.write(next) {
             if let Some(printable) = keycode.printable() {
                 self.buffer.insert(self.cursor, printable);
@@ -164,7 +178,7 @@ impl CharDevice {
     }
 
     /// Takes the current buffer, resetting the state and clearing the decoder for this device
-    pub fn take(&mut self) -> String {
+    pub fn take_buffer(&mut self) -> String {
         let output = self.buffer.clone();
         self.buffer.clear();
         self.cursor = 0;

@@ -1,9 +1,10 @@
 use imgui::ColorEdit;
-use lifec::editor::{Call, RuntimeEditor, Builder};
-use lifec::plugins::{Connection, Sequence, ThunkContext, Process};
-use lifec::{Component, DenseVecStorage, Entity, Extension, Join, Value, WorldExt};
+use lifec::editor::{Builder, Call, RuntimeEditor};
+use lifec::plugins::{Connection, Remote, Sequence, ThunkContext};
+use lifec::{Component, DenseVecStorage, Entity, Extension, Value, WorldExt};
 use std::collections::BTreeMap;
 use std::ops::DerefMut;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tracing::{event, Level};
 use wgpu::{DepthStencilState, SurfaceConfiguration};
@@ -24,6 +25,9 @@ pub use color::ColorTheme;
 
 mod runmd;
 pub use runmd::Runmd;
+
+mod plain;
+pub use plain::Plain;
 
 /// Shell extension for the lifec runtime
 pub struct Shell<Style = DefaultTheme>
@@ -48,6 +52,10 @@ where
     channel: i32,
     /// background clear color
     background: [f32; 4],
+
+    connection: Option<TcpStream>,
+
+    address: Option<String>,
 }
 
 impl<Style> Default for Shell<Style>
@@ -65,6 +73,8 @@ where
             theme: Default::default(),
             channel: Default::default(),
             background: Style::background(),
+            connection: None,
+            address: None,
         }
     }
 }
@@ -84,6 +94,14 @@ impl ColorTheme for DefaultTheme {
             .with_color([0.4, 0.8, 0.8, 1.0])
             .with_scale(40.0)
             .with_z(0.2)
+    }
+
+    fn background() -> [f32; 4] {
+        [0.02122, 0.02519, 0.03434, 1.0]
+    }
+
+    fn foreground() -> [f32; 4] {
+        Self::yellow()
     }
 
     fn red() -> [f32; 4] {
@@ -106,17 +124,13 @@ impl ColorTheme for DefaultTheme {
         [0.78354, 0.52712, 0.19807, 1.0]
     }
 
-    fn background() -> [f32; 4] {
-        [0.02122, 0.02519, 0.03434, 1.0]
-    }
-
     fn orange() -> [f32; 4] {
         [0.78354, 0.52712, 0.19807, 1.0]
     }
 }
 
 /// This component adds a channel to this shell
-#[derive(Component, Default)]
+#[derive(Component, Default, Clone)]
 #[storage(DenseVecStorage)]
 pub struct ShellChannel(Option<Sender<(u32, u8)>>);
 
@@ -124,6 +138,11 @@ impl<Style> Shell<Style>
 where
     Style: ColorTheme + Default,
 {
+    /// Connects to a tcp stream
+    pub async fn connect_to(&mut self, address: impl AsRef<str>) {
+        self.connection = TcpStream::connect(address.as_ref()).await.ok()
+    }
+
     /// gets the underlying runtime_editor
     pub fn runtime_editor_mut(&mut self) -> &mut RuntimeEditor {
         &mut self.runtime_editor
@@ -170,6 +189,7 @@ where
             let channel = entity.id();
             self.char_devices.insert(channel, CharDevice::default());
 
+            event!(Level::DEBUG, "Adding channel for {}", entity.id());
             Some(ShellChannel(Some(tx)))
         } else {
             None
@@ -178,12 +198,13 @@ where
 
     /// Renders the input section
     pub fn render_input(&'_ mut self, config: &SurfaceConfiguration) {
+        let prompt_enabled = self.connection.is_some();
         if let (Some(glyph_brush), Some(active), Some(theme)) = self.prepare_render_input() {
             // Renders the buffer
             glyph_brush.queue(Section {
                 screen_position: (90.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
-                text: theme.render::<Runmd>(active.output().as_ref()),
+                text: theme.render::<Runmd>(active.output().as_ref(), prompt_enabled),
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
                     h_align: HorizontalAlign::Left,
@@ -195,23 +216,10 @@ where
             glyph_brush.queue(Section {
                 screen_position: (90.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
-                text: {
-                    vec![
-                        // prompt,
-                        Text::new(active.before_cursor().as_ref())
-                            .with_color([0.0, 0.0, 0.0, 0.0])
-                            .with_scale(40.0)
-                            .with_z(0.2),
-                        Text::new("_")
-                            .with_color([0.4, 0.8, 0.8, 1.0])
-                            .with_scale(40.0)
-                            .with_z(0.2),
-                        Text::new(active.after_cursor().as_ref())
-                            .with_color([0.0, 0.0, 0.0, 0.0])
-                            .with_scale(40.0)
-                            .with_z(0.2),
-                    ]
-                },
+                text: theme.render_cursor(prompt_enabled)(
+                    active.before_cursor().as_ref(),
+                    active.after_cursor().as_ref(),
+                ),
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
                     h_align: HorizontalAlign::Left,
@@ -219,18 +227,20 @@ where
                 },
             });
 
-            // Renders line numbers
-            glyph_brush.queue(Section {
-                screen_position: (10.0, 180.0),
-                bounds: (config.width as f32 / 2.0, config.height as f32),
-                text: {
-                    vec![Text::new(active.line_nos().as_ref())
-                        .with_color([1.0, 1.0, 1.0, 0.4])
-                        .with_scale(40.0)
-                        .with_z(1.0)]
-                },
-                ..Default::default()
-            });
+            if !prompt_enabled {
+                // Renders line numbers
+                glyph_brush.queue(Section {
+                    screen_position: (10.0, 180.0),
+                    bounds: (config.width as f32 / 2.0, config.height as f32),
+                    text: {
+                        vec![Text::new(active.line_nos().as_ref())
+                            .with_color([1.0, 1.0, 1.0, 0.4])
+                            .with_scale(40.0)
+                            .with_z(1.0)]
+                    },
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -242,7 +252,7 @@ where
             glyph_brush.queue(Section {
                 screen_position: ((config.width as f32) / 2.0 + 60.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
-                text: theme.render::<Runmd>(active.output().as_ref()),
+                text: theme.render::<Plain>(active.output().as_ref(), false),
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
                     h_align: HorizontalAlign::Left,
@@ -264,10 +274,7 @@ impl Extension for Shell {
             a: 1.0,
         });
 
-        _world
-            .create_entity()
-            .with(ThunkContext::default())
-            .build();
+        _world.create_entity().with(ThunkContext::default()).build();
     }
 
     fn on_window_event(
@@ -430,29 +437,46 @@ impl Extension for Shell {
     }
 
     fn on_run(&'_ mut self, app_world: &lifec::World) {
+        let mut send_to_connection = None;
         if let Some(rx) = self.byte_rx.as_mut() {
             if let Some((channel, next)) = rx.try_recv().ok() {
-                event!(Level::TRACE, "received {next} for char_device {channel}");
                 if let Some(char_device) = self.char_devices.get_mut(&channel) {
-                    char_device.write(next);
+                    if self.channel != channel as i32 && channel != 0 {
+                        // TODO: Add this to a history 
+                        char_device.take_buffer();
+                    }
+
+                    char_device.write_char(next);
+                    if char_device.line_count() > 1 && self.connection.is_some() && channel == 0 {
+                        send_to_connection = Some(char_device.take_buffer());
+                    }
+
+                    self.channel = channel as i32;
                 }
 
-                self.channel = channel as i32;
             }
         }
 
-        let mut shell_outputs = app_world.write_component::<ShellChannel>();
-        let mut contexts = app_world.write_component::<ThunkContext>();
-        let entities = app_world.entities();
+        if let Some(line) = send_to_connection.take() {
+            if let Some(connection) = self.connection.take() {
+                let tokio_runtime = app_world.read_resource::<tokio::runtime::Runtime>();
+                let _ = tokio_runtime.enter();
 
-        for (entity, shell_output, context) in (&entities, &mut shell_outputs, &mut contexts).join()
-        {
-            if let ShellChannel(None) = shell_output {
-                if let Some(channel) = self.add_device(entity) {
-                    *shell_output = channel;
-                }
-            } else if let ShellChannel(Some(channel)) = shell_output {
-                context.set_char_device(channel.clone());
+                self.connection = tokio_runtime.block_on(async move {
+                    event!(Level::TRACE, "Waiting for connection to be writeable");
+                    connection.writable().await.ok();
+
+                    match connection.try_write(format!("{}\r\n", line).as_bytes()) {
+                        Ok(bytes) => {
+                            event!(Level::TRACE, "Wrote {bytes}");
+                            Some(connection)
+                        }
+                        Err(err) => {
+                            event!(Level::ERROR, "Could not write to connection {err}");
+                            None
+                        }
+                    }
+                });
             }
         }
     }
@@ -509,10 +533,13 @@ impl Extension for Shell {
                     if let Some(created) = self
                         .runtime_editor
                         .runtime_mut()
-                        .create_event::<Call, Process>(app_world, "shell")
+                        .create_event::<Call, Remote>(app_world, "shell")
                     {
                         if let Some(channel) = self.add_device(created) {
-                            app_world.write_component().insert(created, channel).ok();
+                            app_world
+                                .write_component()
+                                .insert(created, channel.clone())
+                                .ok();
                             app_world
                                 .write_component()
                                 .insert(created, Sequence::default())
@@ -521,6 +548,30 @@ impl Extension for Shell {
                                 .write_component()
                                 .insert(created, Connection::default())
                                 .ok();
+
+                            let mut contexts = app_world.write_component::<ThunkContext>();
+                            if let Some(tc) = contexts.get_mut(created) {
+                                tc.enable_output(channel.0.clone().unwrap());
+                            }
+                        }
+                    }
+
+                    self.address = Some(String::default());
+                }
+
+                if let Some(address) = self.address.as_mut() {
+                    ui.input_text("address", address).build();
+
+                    ui.same_line();
+                    if ui.button("Connect to") {
+                        if let Some(address) = self.address.clone() {
+                            let tokio_runtime =
+                                app_world.read_resource::<tokio::runtime::Runtime>();
+                            let _ = tokio_runtime.enter();
+
+                            tokio_runtime.block_on(async move {
+                                self.connect_to(address).await;
+                            })
                         }
                     }
                 }
