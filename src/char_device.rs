@@ -1,14 +1,11 @@
-use std::io::Cursor;
-use std::time::Duration;
-
 use lifec::Component;
 use lifec::HashMapStorage;
 use terminal_keycode::{Decoder, KeyCode};
+use std::io::Cursor;
 use tokio::io::AsyncRead;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufWriter;
-use tokio::net::TcpStream;
 
+/// Component that can be used to decode a sequence of terminal characters
+/// 
 #[derive(Component, Default)]
 #[storage(HashMapStorage)]
 pub struct CharDevice {
@@ -39,7 +36,8 @@ impl CharDevice {
         self.line_info.len()
     }
 
-    /// moves the cursor position up a line
+    /// Moves the cursor position up a line
+    /// 
     pub fn cursor_up(&mut self) {
         if self.line > 0 {
             self.line -= 1;
@@ -47,7 +45,8 @@ impl CharDevice {
         }
     }
 
-    /// moves the cursor down a line
+    /// Moves the cursor down a line
+    /// 
     pub fn cursor_down(&mut self) {
         if self.line < self.line_info.len() - 1 {
             self.line += 1;
@@ -55,7 +54,8 @@ impl CharDevice {
         }
     }
 
-    /// moves the cursor left one character
+    /// Moves the cursor left one character
+    /// 
     pub fn cursor_left(&mut self) {
         if self.cursor > 1 && !self.buffer.is_empty() {
             self.cursor -= 1;
@@ -69,7 +69,8 @@ impl CharDevice {
         }
     }
 
-    /// moves the cursor right one character
+    /// Moves the cursor right one character
+    /// 
     pub fn cursor_right(&mut self) {
         if self.cursor < self.buffer.len() {
             self.cursor += 1;
@@ -81,9 +82,13 @@ impl CharDevice {
         }
     }
 
-    /// moves the character to line_no
+    /// Moves the character to line_no
+    /// 
     pub fn goto_line(&mut self, line_no: usize) {
-        let chars = self.line_info.iter().take(line_no + 1).sum::<usize>();
+        let chars = self.line_info
+            .iter()
+            .take(line_no + 1)
+            .sum::<usize>();
 
         self.cursor = chars + line_no;
     }

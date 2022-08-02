@@ -1,6 +1,6 @@
 use imgui::ColorEdit;
-use lifec::editor::{Builder, Call, RuntimeEditor};
-use lifec::plugins::{Connection, Remote, Sequence, ThunkContext};
+use lifec::editor::{Builder, Call};
+use lifec::plugins::{Config, Connection, Plugin, Remote, Sequence, ThunkContext};
 use lifec::{Component, DenseVecStorage, Entity, Extension, Value, WorldExt};
 use std::collections::BTreeMap;
 use std::ops::DerefMut;
@@ -34,8 +34,6 @@ pub struct Shell<Style = DefaultTheme>
 where
     Style: ColorTheme + Default,
 {
-    /// runtime editor
-    runtime_editor: RuntimeEditor,
     /// glyph_brush, for rendering fonts
     brush: Option<GlyphBrush<DepthStencilState>>,
     /// byte receiver
@@ -52,9 +50,9 @@ where
     channel: i32,
     /// background clear color
     background: [f32; 4],
-
+    /// Current-live connection
     connection: Option<TcpStream>,
-
+    /// Address to connect to
     address: Option<String>,
 }
 
@@ -64,7 +62,6 @@ where
 {
     fn default() -> Self {
         Self {
-            runtime_editor: Default::default(),
             brush: Default::default(),
             byte_rx: Default::default(),
             byte_tx: Default::default(),
@@ -143,11 +140,6 @@ where
         self.connection = TcpStream::connect(address.as_ref()).await.ok()
     }
 
-    /// gets the underlying runtime_editor
-    pub fn runtime_editor_mut(&mut self) -> &mut RuntimeEditor {
-        &mut self.runtime_editor
-    }
-
     /// Returns the text brush and char device being edited
     pub fn prepare_render_input(
         &mut self,
@@ -204,7 +196,11 @@ where
             glyph_brush.queue(Section {
                 screen_position: (90.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
-                text: theme.render::<Runmd>(active.output().as_ref(), prompt_enabled),
+                // TODO: need to figure out a way to make this generic, but for now this is good enough
+                text: theme.render::<Runmd>(
+                    active.output().as_ref(), 
+                    prompt_enabled
+                ),
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
                     h_align: HorizontalAlign::Left,
@@ -275,6 +271,22 @@ impl Extension for Shell {
         });
 
         _world.create_entity().with(ThunkContext::default()).build();
+        let mut runtime_editor = lifec::editor::RuntimeEditor::default();
+
+        runtime_editor
+            .runtime_mut()
+            .add_config(Config("shell", |a| {
+                // TODO: move this config somewhere else
+                a.block.block_name = a.label("new_remote").as_ref().to_string();
+                a.as_mut()
+                    .with_text("node_title", "Remote sh")
+                    .with_text("thunk_symbol", Remote::symbol())
+                    .with_bool("default_open", true)
+                    .with_bool("enable_listener", true)
+                    .with_text("command", "bash");
+            }));
+
+        _world.insert(runtime_editor);
     }
 
     fn on_window_event(
@@ -354,7 +366,6 @@ impl Extension for Shell {
             self.byte_tx = Some(tx);
             if self.char_devices.is_empty() {
                 self.char_devices.insert(0, CharDevice::default());
-                self.editing = Some(0);
             }
 
             // TODO: This is a temp setting
@@ -405,10 +416,8 @@ impl Extension for Shell {
         staging_belt: &mut wgpu::util::StagingBelt,
     ) {
         self.render_input(config);
-
         self.render_channel(config);
 
-        // Draw the text!
         if let Some(depth_view) = depth_view.as_ref() {
             if let Some(brush) = self.brush.as_mut() {
                 brush
@@ -442,7 +451,7 @@ impl Extension for Shell {
             if let Some((channel, next)) = rx.try_recv().ok() {
                 if let Some(char_device) = self.char_devices.get_mut(&channel) {
                     if self.channel != channel as i32 && channel != 0 {
-                        // TODO: Add this to a history 
+                        // TODO: Add this to a history
                         char_device.take_buffer();
                     }
 
@@ -453,7 +462,6 @@ impl Extension for Shell {
 
                     self.channel = channel as i32;
                 }
-
             }
         }
 
@@ -465,18 +473,42 @@ impl Extension for Shell {
                 self.connection = tokio_runtime.block_on(async move {
                     event!(Level::TRACE, "Waiting for connection to be writeable");
                     connection.writable().await.ok();
-
-                    match connection.try_write(format!("{}\r\n", line).as_bytes()) {
+                    // Line-endings need to be handled on the receiving end
+                    let message = format!("{}\r\n", line);
+                    match connection.try_write(message.as_bytes()) {
                         Ok(bytes) => {
                             event!(Level::TRACE, "Wrote {bytes}");
+                            if bytes != message.len() {
+                                event!(Level::WARN, "Did not write entire message");
+                                todo!("Need to handle partialy sent messages")
+                            }
+
+                            Some(connection)
+                        }
+                        Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
+                            event!(Level::WARN, "Connection is not ready.");
                             Some(connection)
                         }
                         Err(err) => {
-                            event!(Level::ERROR, "Could not write to connection {err}");
+                            // Not actually hazardous but useful for posterity
+                            event!(
+                                Level::WARN,
+                                "Connection to {} closed",
+                                connection
+                                    .local_addr()
+                                    .ok()
+                                    .and_then(|a| Some(a.to_string()))
+                                    .unwrap_or_default()
+                            );
+                            event!(Level::DEBUG, "Error on connection close: {err}");
                             None
                         }
                     }
                 });
+
+                if self.connection.is_none() {
+                    self.editing = None;
+                }
             }
         }
     }
@@ -530,10 +562,10 @@ impl Extension for Shell {
                 {}
 
                 if ui.button("Add Remote") {
-                    if let Some(created) = self
-                        .runtime_editor
-                        .runtime_mut()
-                        .create_event::<Call, Remote>(app_world, "shell")
+                    let runtime = app_world.read_resource::<lifec::editor::RuntimeEditor>();
+                    let runtime = runtime.runtime();
+
+                    if let Some(created) = runtime.create_event::<Call, Remote>(app_world, "shell")
                     {
                         if let Some(channel) = self.add_device(created) {
                             app_world
@@ -565,13 +597,15 @@ impl Extension for Shell {
                     ui.same_line();
                     if ui.button("Connect to") {
                         if let Some(address) = self.address.clone() {
+                            self.editing = Some(0);
+
                             let tokio_runtime =
                                 app_world.read_resource::<tokio::runtime::Runtime>();
                             let _ = tokio_runtime.enter();
 
                             tokio_runtime.block_on(async move {
                                 self.connect_to(address).await;
-                            })
+                            });
                         }
                     }
                 }

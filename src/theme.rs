@@ -3,7 +3,7 @@ use logos::{Logos, Span};
 use std::{collections::BTreeMap, ops::Range};
 use wgpu_glyph::Text;
 
-use crate::{ColorTheme, DefaultTheme, CharDevice};
+use crate::{ColorTheme, DefaultTheme};
 
 /// Generic tokens that can be used to support colorization directly
 /// from a Logos lexer
@@ -45,6 +45,7 @@ impl Theme {
         Theme::new_with(ThunkContext::default())
     }
 }
+
 
 impl<Style> Theme<Style>
 where
