@@ -17,3 +17,4 @@ winit = "0.26"
 tracing = "0.1.35"
 logos = "0.12.1"
 tracing-subscriber =  { version = "0.3", features = [ "env-filter" ] }
+specs = { version = "0.17.0", features = ["default", "derive"] }

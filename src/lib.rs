@@ -1,7 +1,8 @@
 use imgui::ColorEdit;
 use lifec::editor::{Builder, Call};
 use lifec::plugins::{Config, Connection, Plugin, Remote, Sequence, ThunkContext};
-use lifec::{Component, DenseVecStorage, Entity, Extension, Value, WorldExt};
+use lifec::{Component, DenseVecStorage, Entity, Extension, Value, WorldExt, System, WriteStorage, Entities, Join};
+use specs::RunNow;
 use std::collections::BTreeMap;
 use std::ops::DerefMut;
 use tokio::net::TcpStream;
@@ -511,6 +512,8 @@ impl Extension for Shell {
                 }
             }
         }
+    
+        self.run_now(app_world);
     }
 
     fn on_ui(&'_ mut self, app_world: &lifec::World, ui: &'_ imgui::Ui<'_>) {
@@ -611,5 +614,34 @@ impl Extension for Shell {
                 }
             });
         });
+    }
+}
+
+impl<'a, Style> System<'a> for Shell<Style>
+where
+    Style: ColorTheme + Default,
+{
+    type SystemData = (
+        Entities<'a>,
+        WriteStorage<'a, ThunkContext>,
+        WriteStorage<'a, ShellChannel>,
+    );
+
+    fn run(&mut self, (entities, mut contexts, mut channels): Self::SystemData) {
+        for (entity, tc) in (&entities, &mut contexts).join() {
+            if tc.as_ref().is_enabled("enable_char_device").unwrap_or_default() && !channels.contains(entity) {
+                if let Some(channel) = self.add_device(entity) {
+                    match channels.insert(entity, channel.clone()) {
+                        Ok(_) => {
+                            event!(Level::DEBUG, "Enabled char device for {:?}", entity);
+                            tc.enable_output(channel.0.clone().unwrap());
+                        },
+                        Err(err) => {
+                            event!(Level::ERROR, "Could not insert channel for {:?}, {err}", entity);
+                        },
+                    }
+                }
+            }
+        }
     }
 }
