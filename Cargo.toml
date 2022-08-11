@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lifec = { git = "https://github.com/juliusl/lifec.git", branch = "main" }
+lifec = { git = "https://github.com/juliusl/lifec.git", branch = "pr/v2_api" }
 tokio = { version = "1.19.2", features = ["default", "rt-multi-thread", "sync", "fs", "process", "io-util", "io-std", "macros"] }
 wgpu_glyph = "0.17.0"
 terminal-keycode = "1.1.1"
