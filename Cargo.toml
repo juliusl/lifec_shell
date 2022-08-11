@@ -9,8 +9,6 @@ edition = "2021"
 lifec = { git = "https://github.com/juliusl/lifec.git", branch = "pr/v2_api" }
 tokio = { version = "1.19.2", features = ["default", "rt-multi-thread", "sync", "fs", "process", "io-util", "io-std", "macros"] }
 wgpu_glyph = "0.17.0"
-terminal-keycode = "1.1.1"
-raw_tty = "0.1.0"
 imgui = "0.8.2"
 wgpu = "0.13.1"
 winit = "0.26"

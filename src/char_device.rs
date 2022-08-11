@@ -1,16 +1,17 @@
 use lifec::Component;
 use lifec::HashMapStorage;
-use terminal_keycode::{Decoder, KeyCode};
+use tracing::Level;
+use tracing::event;
 use std::io::Cursor;
 use tokio::io::AsyncRead;
 
 /// Component that can be used to decode a sequence of terminal characters
-/// 
+///
 #[derive(Component, Default)]
 #[storage(HashMapStorage)]
 pub struct CharDevice {
-    /// Decodes terminal character sequences
-    decoder: Decoder,
+    // /// Decodes terminal character sequences
+    // decoder: Decoder,
     /// The current buffer this device is writing to
     buffer: String,
     /// character counts per line
@@ -25,7 +26,7 @@ pub struct CharDevice {
 
 impl CharDevice {
     /// Returns a read_only cursor for the current state of the buffer
-    /// 
+    ///
     /// Not meant for polling for changes, but to make it more convenient for reading the current state of the device
     pub fn readonly_cursor(&self) -> impl AsyncRead {
         Cursor::new(self.buffer.as_bytes().to_vec())
@@ -37,7 +38,7 @@ impl CharDevice {
     }
 
     /// Moves the cursor position up a line
-    /// 
+    ///
     pub fn cursor_up(&mut self) {
         if self.line > 0 {
             self.line -= 1;
@@ -46,7 +47,7 @@ impl CharDevice {
     }
 
     /// Moves the cursor down a line
-    /// 
+    ///
     pub fn cursor_down(&mut self) {
         if self.line < self.line_info.len() - 1 {
             self.line += 1;
@@ -55,7 +56,7 @@ impl CharDevice {
     }
 
     /// Moves the cursor left one character
-    /// 
+    ///
     pub fn cursor_left(&mut self) {
         if self.cursor > 1 && !self.buffer.is_empty() {
             self.cursor -= 1;
@@ -70,7 +71,7 @@ impl CharDevice {
     }
 
     /// Moves the cursor right one character
-    /// 
+    ///
     pub fn cursor_right(&mut self) {
         if self.cursor < self.buffer.len() {
             self.cursor += 1;
@@ -83,12 +84,9 @@ impl CharDevice {
     }
 
     /// Moves the character to line_no
-    /// 
+    ///
     pub fn goto_line(&mut self, line_no: usize) {
-        let chars = self.line_info
-            .iter()
-            .take(line_no + 1)
-            .sum::<usize>();
+        let chars = self.line_info.iter().take(line_no + 1).sum::<usize>();
 
         self.cursor = chars + line_no;
     }
@@ -97,31 +95,22 @@ impl CharDevice {
     ///
     /// Updates internal counters
     pub fn write_char(&mut self, next: u8) {
-        for keycode in self.decoder.write(next) {
-            if let Some(printable) = keycode.printable() {
-                self.buffer.insert(self.cursor, printable);
-                self.cursor += 1 as usize;
-            } else {
-                match keycode {
-                    KeyCode::Backspace => {
-                        if self.cursor > 0 && !self.buffer.is_empty() {
-                            self.cursor -= 1;
-                            match self.buffer.remove(self.cursor) {
-                                '\r' | '\n' => {
-                                    if self.line > 0 {
-                                        self.line -= 1;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => {}
+        match char::from(next) {
+            ref c if c.is_control() || c.is_ascii_control() => {
+                if *c == '\u{7f}' || *c == '\u{00008}' {
+                    self.backspace();
+                } else if *c == '\r' {
+                    self.buffer.insert(self.cursor, *c);
+                    self.cursor += 1 as usize;
+                    self.line += 1;
                 }
+            },
+            ref c if c.is_alphanumeric() || c.is_whitespace() || c.is_ascii_whitespace() => {
+                self.buffer.insert(self.cursor, *c);
+                self.cursor += 1 as usize;
             }
-
-            if keycode == KeyCode::Enter {
-                self.line += 1;
+            c => {
+                event!(Level::TRACE, "unhandled char {:#?}", c);
             }
         }
 
@@ -189,7 +178,20 @@ impl CharDevice {
         self.cursor = 0;
         self.line = 0;
         self.line_info.clear();
-        self.decoder = Decoder::default();
         output
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor > 0 && !self.buffer.is_empty() {
+            self.cursor -= 1;
+            match self.buffer.remove(self.cursor) {
+                '\r' | '\n' => {
+                    if self.line > 0 {
+                        self.line -= 1;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
