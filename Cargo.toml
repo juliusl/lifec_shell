@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 lifec = { git = "https://github.com/juliusl/lifec.git", branch = "pr/v2_api" }
+reality = { git = "https://github.com/juliusl/reality.git" }
 tokio = { version = "1.19.2", features = ["default", "rt-multi-thread", "sync", "fs", "process", "io-util", "io-std", "macros"] }
 wgpu_glyph = "0.17.0"
 imgui = "0.8.2"
@@ -16,3 +17,4 @@ tracing = "0.1.35"
 logos = "0.12.1"
 tracing-subscriber =  { version = "0.3", features = [ "env-filter" ] }
 specs = { version = "0.17.0", features = ["default", "derive"] }
+base64 = "0.13.0"

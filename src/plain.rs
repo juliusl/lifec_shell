@@ -1,10 +1,9 @@
 use logos::Logos;
-use lifec::plugins::ThunkContext;
 
 use crate::{theme::ThemeToken, Token};
 
 #[derive(Logos, PartialEq, Eq, Debug, Clone)]
-#[logos(extras = ThunkContext)]
+#[logos(extras = ())]
 pub enum Plain {
     Normal,
     #[error]

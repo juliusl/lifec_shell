@@ -1,10 +1,12 @@
 use imgui::ColorEdit;
-use lifec::editor::{Builder, Call};
-use lifec::plugins::{Config, Connection, Plugin, Remote, Sequence, ThunkContext};
-use lifec::{Component, DenseVecStorage, Entity, Extension, Value, WorldExt, System, WriteStorage, Entities, Join};
-use specs::RunNow;
+use lifec::plugins::ThunkContext;
+use lifec::AttributeIndex;
+use lifec::{
+    Component, DenseVecStorage, Entities, Entity, Extension, Join, System, WorldExt, WriteStorage,
+};
 use std::collections::BTreeMap;
 use std::ops::DerefMut;
+use theme::Grammer;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tracing::{event, Level};
@@ -13,11 +15,13 @@ use wgpu_glyph::{
     ab_glyph, BuiltInLineBreaker, GlyphBrush, GlyphBrushBuilder, HorizontalAlign, Layout, Section,
     Text, VerticalAlign,
 };
+use winit::event::WindowEvent;
 
 mod char_device;
 pub use char_device::CharDevice;
 
 mod theme;
+pub use theme::DefaultTheme;
 pub use theme::Theme;
 pub use theme::Token;
 
@@ -31,9 +35,10 @@ mod plain;
 pub use plain::Plain;
 
 /// Shell extension for the lifec runtime
-pub struct Shell<Style = DefaultTheme>
+pub struct Shell<G, Style = DefaultTheme>
 where
     Style: ColorTheme + Default,
+    G: Grammer,
 {
     /// glyph_brush, for rendering fonts
     brush: Option<GlyphBrush<DepthStencilState>>,
@@ -55,11 +60,14 @@ where
     connection: Option<TcpStream>,
     /// Address to connect to
     address: Option<String>,
+    /// Grammer state
+    grammer: G, 
 }
 
-impl<Style> Default for Shell<Style>
+impl<G, Style> Default for Shell<G, Style>
 where
     Style: ColorTheme + Default,
+    G: Grammer + Default,
 {
     fn default() -> Self {
         Self {
@@ -73,57 +81,8 @@ where
             background: Style::background(),
             connection: None,
             address: None,
+            grammer: G::default(),
         }
-    }
-}
-
-#[derive(Default, Clone)]
-pub struct DefaultTheme;
-
-impl ColorTheme for DefaultTheme {
-    fn prompt() -> Text<'static> {
-        Text::new("> ")
-            .with_color([1.0, 0.0, 0.0, 1.0])
-            .with_scale(40.0)
-    }
-
-    fn cursor() -> Text<'static> {
-        Text::new("_")
-            .with_color([0.4, 0.8, 0.8, 1.0])
-            .with_scale(40.0)
-            .with_z(0.2)
-    }
-
-    fn background() -> [f32; 4] {
-        [0.02122, 0.02519, 0.03434, 1.0]
-    }
-
-    fn foreground() -> [f32; 4] {
-        Self::yellow()
-    }
-
-    fn red() -> [f32; 4] {
-        [0.7454, 0.14996, 0.17789, 1.0]
-    }
-
-    fn blue() -> [f32; 4] {
-        [0.11954, 0.42869, 0.86316, 1.0]
-    }
-
-    fn purple() -> [f32; 4] {
-        [0.56471, 0.18782, 0.72306, 1.0]
-    }
-
-    fn green() -> [f32; 4] {
-        [0.31399, 0.54572, 0.1912, 1.0]
-    }
-
-    fn yellow() -> [f32; 4] {
-        [0.78354, 0.52712, 0.19807, 1.0]
-    }
-
-    fn orange() -> [f32; 4] {
-        [0.78354, 0.52712, 0.19807, 1.0]
     }
 }
 
@@ -132,9 +91,10 @@ impl ColorTheme for DefaultTheme {
 #[storage(DenseVecStorage)]
 pub struct ShellChannel(Option<Sender<(u32, u8)>>);
 
-impl<Style> Shell<Style>
+impl<G, Style> Shell<G, Style>
 where
     Style: ColorTheme + Default,
+    G: Grammer + Clone,
 {
     /// Connects to a tcp stream
     pub async fn connect_to(&mut self, address: impl AsRef<str>) {
@@ -192,16 +152,14 @@ where
     /// Renders the input section
     pub fn render_input(&'_ mut self, config: &SurfaceConfiguration) {
         let prompt_enabled = self.connection.is_some();
+        let grammer = self.grammer.clone();
         if let (Some(glyph_brush), Some(active), Some(theme)) = self.prepare_render_input() {
             // Renders the buffer
             glyph_brush.queue(Section {
                 screen_position: (90.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
                 // TODO: need to figure out a way to make this generic, but for now this is good enough
-                text: theme.render::<Runmd>(
-                    active.output().as_ref(), 
-                    prompt_enabled
-                ),
+                text: theme.render(&grammer, active.output().as_ref(), prompt_enabled),
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
                     h_align: HorizontalAlign::Left,
@@ -243,13 +201,15 @@ where
 
     /// Renders the currently active channel
     pub fn render_channel(&mut self, config: &SurfaceConfiguration) {
+        let grammer = self.grammer.clone();
+
         if let (Some(glyph_brush), Some(active), Some(theme)) =
             self.prepare_render_output(self.channel as u32)
         {
             glyph_brush.queue(Section {
                 screen_position: ((config.width as f32) / 2.0 + 60.0, 180.0),
                 bounds: (config.width as f32 / 2.0, config.height as f32),
-                text: theme.render::<Plain>(active.output().as_ref(), false),
+                text: theme.render(&grammer, active.output().as_ref(), false),
                 layout: Layout::Wrap {
                     line_breaker: BuiltInLineBreaker::AnyCharLineBreaker,
                     h_align: HorizontalAlign::Left,
@@ -260,7 +220,11 @@ where
     }
 }
 
-impl Extension for Shell {
+impl<G, Style> Extension for Shell<G, Style>
+where
+    Style: ColorTheme + Default,
+    G: Grammer + Clone,
+{
     fn configure_app_world(_world: &mut lifec::World) {
         _world.register::<ShellChannel>();
 
@@ -270,43 +234,18 @@ impl Extension for Shell {
             b: 0.03434,
             a: 1.0,
         });
-
-        _world.create_entity().with(ThunkContext::default()).build();
-        let mut runtime_editor = lifec::editor::RuntimeEditor::default();
-
-        runtime_editor
-            .runtime_mut()
-            .add_config(Config("shell", |a| {
-                // TODO: move this config somewhere else
-                a.block.block_name = a.label("new_remote").as_ref().to_string();
-                a.as_mut()
-                    .with_text("node_title", "Remote sh")
-                    .with_text("thunk_symbol", Remote::symbol())
-                    .with_bool("default_open", true)
-                    .with_bool("enable_listener", true)
-                    .with_text("command", "bash");
-            }));
-
-        _world.insert(runtime_editor);
     }
 
-    fn on_window_event(
-        &'_ mut self,
-        _app_world: &lifec::World,
-        event: &'_ lifec::editor::WindowEvent<'_>,
-    ) {
+    fn on_window_event(&'_ mut self, _app_world: &lifec::World, event: &'_ WindowEvent<'_>) {
         match (event, self.prepare_render_input()) {
-            (lifec::editor::WindowEvent::ReceivedCharacter(char), _) => {
+            (WindowEvent::ReceivedCharacter(char), _) => {
                 if let Some(sender) = &self.byte_tx {
                     if let Some(editing) = self.editing {
                         sender.try_send((editing as u32, *char as u8)).ok();
                     }
                 }
             }
-            (
-                lifec::editor::WindowEvent::KeyboardInput { input, .. },
-                (.., Some(editing), _theme),
-            ) => {
+            (WindowEvent::KeyboardInput { input, .. }, (.., Some(editing), _theme)) => {
                 match (input.virtual_keycode, input.state) {
                     // TODO: After integrating some parts from gamegamegame, this part can be improved
                     (Some(key), _) => match key {
@@ -372,33 +311,13 @@ impl Extension for Shell {
             // TODO: This is a temp setting
             let mut default_context = ThunkContext::default();
             default_context
-                .as_mut()
-                .define("bracket", "color")
-                .edit_as(Value::TextBuffer("purple".to_string()));
-            default_context
-                .as_mut()
-                .define("operator", "color")
-                .edit_as(Value::TextBuffer("yellow".to_string()));
-            default_context
-                .as_mut()
-                .define("identifier", "color")
-                .edit_as(Value::TextBuffer("red".to_string()));
-            default_context
-                .as_mut()
-                .define("keyword", "color")
-                .edit_as(Value::TextBuffer("blue".to_string()));
-            default_context
-                .as_mut()
-                .define("literal", "color")
-                .edit_as(Value::TextBuffer("green".to_string()));
-            default_context
-                .as_mut()
-                .define("comment", "color")
-                .edit_as(Value::TextBuffer("green".to_string()));
-            default_context
-                .as_mut()
-                .define("whitespace", "color")
-                .edit_as(Value::TextBuffer("yellow".to_string()));
+                .state_mut()
+                .with_text("bracket", "purple")
+                .with_text("operator", "yellow")
+                .with_text("identifier", "red")
+                .with_text("literal", "green")
+                .with_text("comment", "green")
+                .with_text("whitespace", "yellow");
 
             self.theme = Some(Theme::new_with(default_context));
         }
@@ -512,8 +431,8 @@ impl Extension for Shell {
                 }
             }
         }
-    
-        self.run_now(app_world);
+
+        //  self.run_now(app_world);
     }
 
     fn on_ui(&'_ mut self, app_world: &lifec::World, ui: &'_ imgui::Ui<'_>) {
@@ -539,7 +458,7 @@ impl Extension for Shell {
 
                 if ui.button("Reset colors") {
                     if let Some(theme) = self.theme.as_mut() {
-                        theme.reset_colors();
+                        theme.load_colors();
 
                         if let Some(color) =
                             theme.get_color(Token::Custom("background".to_string()))
@@ -564,36 +483,6 @@ impl Extension for Shell {
                     .build()
                 {}
 
-                if ui.button("Add Remote") {
-                    let runtime = app_world.read_resource::<lifec::editor::RuntimeEditor>();
-                    let runtime = runtime.runtime();
-
-                    if let Some(created) = runtime.create_event::<Call, Remote>(app_world, "shell")
-                    {
-                        if let Some(channel) = self.add_device(created) {
-                            app_world
-                                .write_component()
-                                .insert(created, channel.clone())
-                                .ok();
-                            app_world
-                                .write_component()
-                                .insert(created, Sequence::default())
-                                .ok();
-                            app_world
-                                .write_component()
-                                .insert(created, Connection::default())
-                                .ok();
-
-                            let mut contexts = app_world.write_component::<ThunkContext>();
-                            if let Some(tc) = contexts.get_mut(created) {
-                                tc.enable_output(channel.0.clone().unwrap());
-                            }
-                        }
-                    }
-
-                    self.address = Some(String::default());
-                }
-
                 if let Some(address) = self.address.as_mut() {
                     ui.input_text("address", address).build();
 
@@ -617,9 +506,10 @@ impl Extension for Shell {
     }
 }
 
-impl<'a, Style> System<'a> for Shell<Style>
+impl<'a, G, Style> System<'a> for Shell<G, Style>
 where
     Style: ColorTheme + Default,
+    G: Grammer + Clone,
 {
     type SystemData = (
         Entities<'a>,
@@ -629,16 +519,20 @@ where
 
     fn run(&mut self, (entities, mut contexts, mut channels): Self::SystemData) {
         for (entity, tc) in (&entities, &mut contexts).join() {
-            if tc.as_ref().is_enabled("enable_char_device").unwrap_or_default() && !channels.contains(entity) {
+            if tc.is_enabled("enable_char_device") && !channels.contains(entity) {
                 if let Some(channel) = self.add_device(entity) {
                     match channels.insert(entity, channel.clone()) {
                         Ok(_) => {
                             event!(Level::DEBUG, "Enabled char device for {:?}", entity);
                             tc.enable_output(channel.0.clone().unwrap());
-                        },
+                        }
                         Err(err) => {
-                            event!(Level::ERROR, "Could not insert channel for {:?}, {err}", entity);
-                        },
+                            event!(
+                                Level::ERROR,
+                                "Could not insert channel for {:?}, {err}",
+                                entity
+                            );
+                        }
                     }
                 }
             }

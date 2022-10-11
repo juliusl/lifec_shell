@@ -1,20 +1,22 @@
-use lifec::plugins::ThunkContext;
-use lifec::AttributeGraphElements;
-use lifec::AttributeGraphEvents;
+use logos::{Logos, Span};
+use reality::Elements;
+
+use crate::{theme::Grammer, Token};
+
+mod v1_lexer;
+use v1_lexer::AttributeGraphElements;
+use v1_lexer::AttributeGraphEvents;
 use lifec::Value;
 use logos::Lexer;
-use logos::Logos;
-use logos::Span;
 use tracing::event;
 use tracing::Level;
 
 use crate::theme::ThemeToken;
-use crate::Token;
 
-/// Better runmd language parser, built on top of the v1 parser
-/// Builds the attribute graph while lexing
+/// Runmd language parser from v1 parser and reality parser, 
+/// 
 #[derive(Logos, PartialEq, Eq, Debug, Clone)]
-#[logos(extras = ThunkContext)]
+#[logos(extras = ())]
 pub enum Runmd {
     /// Delimits the start or end of a block
     ///
@@ -28,7 +30,9 @@ pub enum Runmd {
     /// add, define
     #[token("add", on_block_event)]
     #[token("define", on_block_event)]
-    BlockEvent(Vec<Span>),
+    #[token(":", on_block_event)]
+    #[token("+", on_block_event)]
+    BlockKeyword(Vec<Span>),
     /// Attribute values
     /// ex: .text hello world
     ///     .int  5
@@ -45,6 +49,21 @@ pub enum Runmd {
     #[error]
     Error,
 }
+
+impl Grammer for Runmd {
+    fn parse(&self, content: impl AsRef<str>) -> Vec<ThemeToken> {
+        let mut tokens: Vec<Vec<ThemeToken>> = vec![];
+        let mut grammer = Runmd::lexer(content.as_ref());
+
+        while let Some(token) = grammer.next() {
+            tokens.push(token.into());
+        }
+
+        tokens.concat()
+    }
+}
+
+
 
 impl Default for Runmd {
     fn default() -> Self {
@@ -80,7 +99,7 @@ impl Into<Vec<ThemeToken>> for Runmd {
 
                 address
             }
-            Runmd::BlockEvent(spans) => {
+            Runmd::BlockKeyword(spans) => {
                 let mut tokens = vec![];
 
                 if let Some(event_name) = spans.get(0) {
@@ -152,7 +171,6 @@ fn on_block_event(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
                     ) = (spanned.next(), spanned.next())
                     {
                         if let Some(value) = get_value(value) {
-                            lexer.extras.as_mut().with(&attribute_name, value.clone());
                             event!(Level::TRACE, "Add event, {attribute_name}, {:?}", value);
                             tokens.push(Span {
                                 start: event_span.end,
@@ -194,12 +212,6 @@ fn on_block_event(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
                             start: start + event_span.end,
                             end: end + event_span.end + 1,
                         });
-
-                        let transient = lexer.extras.as_mut().define(&attribute_name, &symbol_name);
-
-                        if let Some(value) = get_value(value) {
-                            transient.edit_as(value.clone());
-                        }
                     }
                 }
 
@@ -267,7 +279,25 @@ fn on_attribute_value(lexer: &mut Lexer<Runmd>) -> Option<(Span, Span)> {
                 }
                 _ => None,
             },
-            _ => None,
+            _ => {
+                // Reality allows custom attribute types,
+                // Merging reality elements parser w/ v1 parser here
+                let mut elements = Elements::lexer(value);
+                match elements.next() {
+                    Some(element) => {
+                        match element {
+                            Elements::Identifier(_) => todo!(),
+                            Elements::AttributeType(_) => {
+                                
+                            },
+                            Elements::Comment(_) => todo!(),
+                            Elements::Error => todo!(),
+                        }
+                    },
+                    None => todo!(),
+                }
+                None 
+            },
         }
     } else {
         None
@@ -283,13 +313,9 @@ fn on_block_delimitter(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
         let mut elements = AttributeGraphElements::lexer(line).spanned();
         return match (elements.next(), elements.next()) {
             (
-                Some((AttributeGraphElements::Symbol(block_name), name_span)),
-                Some((AttributeGraphElements::Symbol(block_symbol), symbol_span)),
+                Some((AttributeGraphElements::Symbol(_), name_span)),
+                Some((AttributeGraphElements::Symbol(_), symbol_span)),
             ) => {
-                lexer
-                    .extras
-                    .as_mut()
-                    .start_block_mode(block_name, block_symbol);
                 Some(vec![
                     delimitter_span.clone(),
                     Span {
@@ -302,31 +328,20 @@ fn on_block_delimitter(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
                     },
                 ])
             }
-            (Some((AttributeGraphElements::Symbol(block_symbol), symbol_span)), None) => {
-                if let Some(block_name) = lexer.extras.as_ref().find_text("block_name") {
-                    lexer
-                        .extras
-                        .as_mut()
-                        .start_block_mode(block_name, block_symbol);
-                    Some(vec![
-                        delimitter_span.clone(),
-                        Span {
-                            start: delimitter_span.end + symbol_span.start,
-                            end: delimitter_span.end + symbol_span.end,
-                        },
-                    ])
-                } else {
-                    lexer.extras.as_mut().end_block_mode();
-                    Some(vec![delimitter_span])
-                }
+            (Some((AttributeGraphElements::Symbol(_), symbol_span)), None) => {
+                Some(vec![
+                    delimitter_span.clone(),
+                    Span {
+                        start: delimitter_span.end + symbol_span.start,
+                        end: delimitter_span.end + symbol_span.end,
+                    },
+                ])
             }
             _ => {
-                lexer.extras.as_mut().end_block_mode();
                 Some(vec![delimitter_span])
             }
         };
     } else {
-        lexer.extras.as_mut().end_block_mode();
         Some(vec![delimitter_span])
     }
 }
@@ -358,22 +373,32 @@ define test_val test .text test hello world
 add label .text test label
 add duration .int2 5, 6
 ```
+
+``` test
+: test .symbol cool_symbol
+
++ .engine
+: .event test
+: .event test2
+: .exit
+```
+
 "#;
 
     // Test lexer
-    let mut lexer = Runmd::lexer_with_extras(runmd, ThunkContext::default());
+    let mut lexer = Runmd::lexer(runmd);
     let token = lexer.next();
     assert_eq!(
         token,
         Some(Runmd::BlockDelimitter(vec![(1..5), (5..9), (10..17)]))
     );
     let token = lexer.next();
-    assert_eq!(token, Some(Runmd::BlockEvent(vec![(18..21), (21..31)])));
+    assert_eq!(token, Some(Runmd::BlockKeyword(vec![(18..21), (21..31)])));
     let _ = lexer.next();
     let token = lexer.next();
     assert_eq!(
         token,
-        Some(Runmd::BlockEvent(vec![(54..60), (61..70), (70..75)]))
+        Some(Runmd::BlockKeyword(vec![(54..60), (61..70), (70..75)]))
     );
     let token = lexer.next();
     if let Some(Runmd::AttributeValue((_, value_span))) = token.clone() {
@@ -381,12 +406,12 @@ add duration .int2 5, 6
     }
 
     // Test graph creation w/ lexer
-    let theme = crate::Theme::new();
-    let (tokens, tc) = theme.parse::<Runmd>(runmd);
+    let runmd_parser = Runmd::default();
+    let tokens = runmd_parser.parse(runmd);
     for (token, span) in tokens {
-        eprintln!("{:?} {}", token, &runmd[span]);
+        if let Some(span) = span {
+            eprintln!("{:?} {}", token, &runmd[span]);
+        }
     }
 
-    let project = lifec::plugins::Project::from(tc.as_ref().clone());
-    let _ = project.find_block("demo").unwrap();
 }

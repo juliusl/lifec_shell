@@ -1,4 +1,4 @@
-use lifec::{combine_default, App, System, editor::RuntimeEditor};
+use lifec::{combine_default, App, System};
 use lifec_shell::Shell;
 
 fn main() {
@@ -7,13 +7,13 @@ fn main() {
         .compact()
         .init();
 
-    let extension = combine_default::<RuntimeEditor, Shell>();
+    // let extension = combine_default::<RuntimeEditor, Shell>();
 
-    lifec::open(
-        "basic example", 
-        Empty{}, 
-        extension,
-    )
+    // lifec::open(
+    //     "basic example", 
+    //     Empty{}, 
+    //     extension,
+    // )
 }
 
 struct Empty; 
