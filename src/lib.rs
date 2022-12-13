@@ -1,9 +1,8 @@
-use imgui::ColorEdit;
+use imgui::{ColorEdit, MenuItem};
 use lifec::plugins::ThunkContext;
-use lifec::AttributeIndex;
-use lifec::{
-    Component, DenseVecStorage, Entities, Entity, Extension, Join, System, WorldExt, WriteStorage,
-};
+use lifec::prelude::{Component, DenseVecStorage, Entity, Extension, World, WorldExt};
+use lifec::state::AttributeIndex;
+use specs::LazyUpdate;
 use std::collections::BTreeMap;
 use std::ops::DerefMut;
 use theme::Grammer;
@@ -30,6 +29,7 @@ pub use color::ColorTheme;
 
 mod runmd;
 pub use runmd::Runmd;
+pub use runmd::RunmdFilesystem;
 
 mod plain;
 pub use plain::Plain;
@@ -61,7 +61,7 @@ where
     /// Address to connect to
     address: Option<String>,
     /// Grammer state
-    grammer: G, 
+    grammer: G,
 }
 
 impl<G, Style> Default for Shell<G, Style>
@@ -149,6 +149,21 @@ where
         }
     }
 
+    /// Returns true if the shell was taken.
+    pub fn add_device_with(&'_ mut self, entity: Entity, buffer: String) -> Option<ShellChannel> {
+        if let Some(tx) = self.byte_tx.clone() {
+            let channel = entity.id();
+            let mut device = CharDevice::default();
+            device.set_buffer(buffer);
+            self.char_devices.insert(channel, device);
+            self.channel = channel as i32;
+            event!(Level::DEBUG, "Adding channel for {}", entity.id());
+            Some(ShellChannel(Some(tx)))
+        } else {
+            None
+        }
+    }
+
     /// Renders the input section
     pub fn render_input(&'_ mut self, config: &SurfaceConfiguration) {
         let prompt_enabled = self.connection.is_some();
@@ -225,7 +240,7 @@ where
     Style: ColorTheme + Default,
     G: Grammer + Clone,
 {
-    fn configure_app_world(_world: &mut lifec::World) {
+    fn configure_app_world(_world: &mut World) {
         _world.register::<ShellChannel>();
 
         _world.insert(wgpu::Color {
@@ -236,7 +251,7 @@ where
         });
     }
 
-    fn on_window_event(&'_ mut self, _app_world: &lifec::World, event: &'_ WindowEvent<'_>) {
+    fn on_window_event(&'_ mut self, _app_world: &World, event: &'_ WindowEvent<'_>) {
         match (event, self.prepare_render_input()) {
             (WindowEvent::ReceivedCharacter(char), _) => {
                 if let Some(sender) = &self.byte_tx {
@@ -301,7 +316,7 @@ where
 
             self.brush = Some(glyph_brush);
 
-            let (tx, rx) = channel::<(u32, u8)>(300);
+            let (tx, rx) = channel::<(u32, u8)>(2048);
             self.byte_rx = Some(rx);
             self.byte_tx = Some(tx);
             if self.char_devices.is_empty() {
@@ -365,7 +380,7 @@ where
         }
     }
 
-    fn on_run(&'_ mut self, app_world: &lifec::World) {
+    fn on_run(&'_ mut self, app_world: &World) {
         let mut send_to_connection = None;
         if let Some(rx) = self.byte_rx.as_mut() {
             if let Some((channel, next)) = rx.try_recv().ok() {
@@ -435,8 +450,22 @@ where
         //  self.run_now(app_world);
     }
 
-    fn on_ui(&'_ mut self, app_world: &lifec::World, ui: &'_ imgui::Ui<'_>) {
+    fn on_ui(&'_ mut self, app_world: &World, ui: &'_ imgui::Ui<'_>) {
         ui.main_menu_bar(|| {
+            ui.menu("Files", || {
+                ui.menu("Workspace", || {
+                    let filesystem = app_world.system_data::<RunmdFilesystem>();
+                    for (entity, file) in filesystem.files() {
+                        if MenuItem::new(format!("{}.runmd", file.symbol)).build(ui) {
+                            if let Some(_) = self
+                                .add_device_with(entity, file.source.clone().unwrap_or_default())
+                            {
+                                self.editing = Some(entity.id());
+                            }
+                        }
+                    }
+                })
+            });
             ui.menu("Shell", || {
                 if let Some(theme) = self.theme.as_mut() {
                     for (token, color) in theme.colors_mut() {
@@ -506,36 +535,36 @@ where
     }
 }
 
-impl<'a, G, Style> System<'a> for Shell<G, Style>
-where
-    Style: ColorTheme + Default,
-    G: Grammer + Clone,
-{
-    type SystemData = (
-        Entities<'a>,
-        WriteStorage<'a, ThunkContext>,
-        WriteStorage<'a, ShellChannel>,
-    );
+// impl<'a, G, Style> System<'a> for Shell<G, Style>
+// where
+//     Style: ColorTheme + Default,
+//     G: Grammer + Clone,
+// {
+//     type SystemData = (
+//         Entities<'a>,
+//         WriteStorage<'a, ThunkContext>,
+//         WriteStorage<'a, ShellChannel>,
+//     );
 
-    fn run(&mut self, (entities, mut contexts, mut channels): Self::SystemData) {
-        for (entity, tc) in (&entities, &mut contexts).join() {
-            if tc.is_enabled("enable_char_device") && !channels.contains(entity) {
-                if let Some(channel) = self.add_device(entity) {
-                    match channels.insert(entity, channel.clone()) {
-                        Ok(_) => {
-                            event!(Level::DEBUG, "Enabled char device for {:?}", entity);
-                            tc.enable_output(channel.0.clone().unwrap());
-                        }
-                        Err(err) => {
-                            event!(
-                                Level::ERROR,
-                                "Could not insert channel for {:?}, {err}",
-                                entity
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+//     fn run(&mut self, (entities, mut contexts, mut channels): Self::SystemData) {
+//         for (entity, tc) in (&entities, &mut contexts).join() {
+//             if tc.is_enabled("enable_char_device") && !channels.contains(entity) {
+//                 if let Some(channel) = self.add_device(entity) {
+//                     match channels.insert(entity, channel.clone()) {
+//                         Ok(_) => {
+//                             event!(Level::DEBUG, "Enabled char device for {:?}", entity);
+//                             tc.enable_output(channel.0.clone().unwrap());
+//                         }
+//                         Err(err) => {
+//                             event!(
+//                                 Level::ERROR,
+//                                 "Could not insert channel for {:?}, {err}",
+//                                 entity
+//                             );
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }

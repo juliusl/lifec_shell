@@ -1,5 +1,4 @@
-use lifec::{plugins::ThunkContext, AttributeGraph, AttributeIndex};
-use logos::{Logos, Span};
+use lifec::{plugins::ThunkContext, prelude::Value, state::{AttributeGraph, AttributeIndex}};
 use std::{collections::BTreeMap, ops::Range};
 use wgpu_glyph::Text;
 
@@ -49,11 +48,10 @@ where
     pub fn new_with(mut tc: ThunkContext) -> Self {
         let mut color_map = BTreeMap::new();
 
-        if let Some(block) = tc.block() {
-            if let Some(theme) = block.index().iter().find(|i| i.root().name() == "theme") {
-                let graph = AttributeGraph::new(theme.clone());
-                tc = tc.with_state(graph);
-            }
+        let block = tc.block();
+        if let Some(theme) = block.index().iter().find(|i| i.root().name() == "theme") {
+            let graph = AttributeGraph::new(theme.clone());
+            tc = tc.with_state(graph);
         }
 
         color_map.insert(Token::Custom("background".to_string()), Style::background());
@@ -89,8 +87,8 @@ where
                     custom => Token::Custom(custom.to_string()),
                 },
                 match value {
-                    lifec::Value::FloatRange(r, g, b) => [*r, *g, *b, 1.0],
-                    lifec::Value::TextBuffer(color_name) => match color_name.as_str() {
+                    Value::FloatRange(r, g, b) => [*r, *g, *b, 1.0],
+                    Value::TextBuffer(color_name) => match color_name.as_str() {
                         "red" => Style::red(),
                         "green" => Style::green(),
                         "blue" => Style::blue(),

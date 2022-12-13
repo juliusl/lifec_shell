@@ -1,20 +1,46 @@
+use lifec::prelude::Entities;
+use lifec::prelude::Join;
+use lifec::prelude::ReadStorage;
+use lifec::prelude::Value;
+use lifec::project::RunmdFile;
 use logos::{Logos, Span};
 use reality::Elements;
+use specs::prelude::*;
+use specs::SystemData;
 
 use crate::{theme::Grammer, Token};
 
 mod v1_lexer;
-use v1_lexer::AttributeGraphElements;
-use v1_lexer::AttributeGraphEvents;
-use lifec::Value;
 use logos::Lexer;
 use tracing::event;
 use tracing::Level;
+use v1_lexer::AttributeGraphElements;
+use v1_lexer::AttributeGraphEvents;
 
 use crate::theme::ThemeToken;
 
-/// Runmd language parser from v1 parser and reality parser, 
-/// 
+/// System data for runmd files,
+///
+#[derive(SystemData)]
+pub struct RunmdFilesystem<'a> {
+    /// Entities ,
+    ///
+    entities: Entities<'a>,
+    /// Current runmd files in storage,
+    ///
+    files: ReadStorage<'a, RunmdFile>,
+}
+
+impl<'a> RunmdFilesystem<'a> {
+    /// REturns an iterator over files,
+    ///
+    pub fn files(&'a self) -> impl Iterator<Item = (lifec::prelude::Entity, &'a RunmdFile)> {
+        (&self.entities, &self.files).join()
+    }
+}
+
+/// Runmd language parser from v1 parser and reality parser,
+///
 #[derive(Logos, PartialEq, Eq, Debug, Clone)]
 #[logos(extras = ())]
 pub enum Runmd {
@@ -62,8 +88,6 @@ impl Grammer for Runmd {
         tokens.concat()
     }
 }
-
-
 
 impl Default for Runmd {
     fn default() -> Self {
@@ -189,43 +213,67 @@ fn on_block_event(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
                 AttributeGraphEvents::Define => {
                     let mut spanned = elements.spanned();
 
-                    if let (
-                        Some((AttributeGraphElements::Symbol(attribute_name), name_span)),
-                        Some((AttributeGraphElements::Symbol(symbol_name), symbol_span)),
-                        Some((value, _)),
-                    ) = (spanned.next(), spanned.next(), spanned.next())
-                    {
-                        event!(
-                            Level::TRACE,
-                            "Defining event, {attribute_name} {symbol_name}, {:?}",
-                            value
-                        );
-                        let Span { start, end } = name_span;
-                        tokens.push(Span {
-                            start: start + event_span.end,
-                            end: end + event_span.end + 1,
-                        });
+                    let line = (spanned.next(), spanned.next(), spanned.next());
 
-                        let Span { start, end } = symbol_span;
-                        lexer.bump(end);
-                        tokens.push(Span {
-                            start: start + event_span.end,
-                            end: end + event_span.end + 1,
-                        });
+                    match line {
+                        (
+                            Some((AttributeGraphElements::Symbol(attribute_name), name_span)),
+                            Some((AttributeGraphElements::Symbol(symbol_name), symbol_span)),
+                            Some((value, _)),
+                        ) => {
+                            event!(
+                                Level::TRACE,
+                                "Defining event, {attribute_name} {symbol_name}, {:?}",
+                                value
+                            );
+                            let Span { start, end } = name_span;
+                            tokens.push(Span {
+                                start: start + event_span.end,
+                                end: end + event_span.end + 1,
+                            });
+
+                            let Span { start, end } = symbol_span;
+                            lexer.bump(end);
+                            tokens.push(Span {
+                                start: start + event_span.end + 1,
+                                end: end + event_span.end,
+                            });
+                        }
+                        (
+                            Some((_, keyword_span)),
+                            Some((_, symbol_span)),
+                            value,
+                        ) => {
+                            let Span { start, end } = keyword_span;
+                            tokens.push(Span {
+                                start: start + event_span.end,
+                                end: end + event_span.end,
+                            });
+
+                            let Span { start, end } = symbol_span;
+                            lexer.bump(end);
+                            tokens.push(Span {
+                                start: start + event_span.end,
+                                end: end + event_span.end,
+                            });
+
+                            if let Some((_, value_span)) = value {
+                                let Span { start, end } = value_span;
+                                lexer.bump(end);
+                                tokens.push(Span {
+                                    start: start + event_span.end,
+                                    end: end + event_span.end,
+                                });
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
                 // Currently unsupported events
-                AttributeGraphEvents::FindRemove
-                | AttributeGraphEvents::Import
-                | AttributeGraphEvents::Copy
-                | AttributeGraphEvents::Apply
-                | AttributeGraphEvents::Edit
-                | AttributeGraphEvents::From
-                | AttributeGraphEvents::To
-                | AttributeGraphEvents::Publish
-                | AttributeGraphEvents::Comment
-                | AttributeGraphEvents::BlockDelimitter => unreachable!("unsupported events"),
+                AttributeGraphEvents::Comment | AttributeGraphEvents::BlockDelimitter => {
+                    unreachable!("unsupported events")
+                }
                 AttributeGraphEvents::Error => {
                     event!(Level::WARN, "Error parsing, {}", event.slice());
                 }
@@ -284,20 +332,16 @@ fn on_attribute_value(lexer: &mut Lexer<Runmd>) -> Option<(Span, Span)> {
                 // Merging reality elements parser w/ v1 parser here
                 let mut elements = Elements::lexer(value);
                 match elements.next() {
-                    Some(element) => {
-                        match element {
-                            Elements::Identifier(_) => todo!(),
-                            Elements::AttributeType(_) => {
-                                
-                            },
-                            Elements::Comment(_) => todo!(),
-                            Elements::Error => todo!(),
-                        }
+                    Some(element) => match element {
+                        Elements::Identifier(_) => todo!(),
+                        Elements::AttributeType(_) => {}
+                        Elements::Comment(_) => todo!(),
+                        Elements::Error => todo!(),
                     },
                     None => todo!(),
                 }
-                None 
-            },
+                None
+            }
         }
     } else {
         None
@@ -315,31 +359,25 @@ fn on_block_delimitter(lexer: &mut Lexer<Runmd>) -> Option<Vec<Span>> {
             (
                 Some((AttributeGraphElements::Symbol(_), name_span)),
                 Some((AttributeGraphElements::Symbol(_), symbol_span)),
-            ) => {
-                Some(vec![
-                    delimitter_span.clone(),
-                    Span {
-                        start: delimitter_span.end + name_span.start,
-                        end: delimitter_span.end + name_span.end,
-                    },
-                    Span {
-                        start: delimitter_span.end + symbol_span.start,
-                        end: delimitter_span.end + symbol_span.end,
-                    },
-                ])
-            }
-            (Some((AttributeGraphElements::Symbol(_), symbol_span)), None) => {
-                Some(vec![
-                    delimitter_span.clone(),
-                    Span {
-                        start: delimitter_span.end + symbol_span.start,
-                        end: delimitter_span.end + symbol_span.end,
-                    },
-                ])
-            }
-            _ => {
-                Some(vec![delimitter_span])
-            }
+            ) => Some(vec![
+                delimitter_span.clone(),
+                Span {
+                    start: delimitter_span.end + name_span.start,
+                    end: delimitter_span.end + name_span.end,
+                },
+                Span {
+                    start: delimitter_span.end + symbol_span.start,
+                    end: delimitter_span.end + symbol_span.end,
+                },
+            ]),
+            (Some((AttributeGraphElements::Symbol(_), symbol_span)), None) => Some(vec![
+                delimitter_span.clone(),
+                Span {
+                    start: delimitter_span.end + symbol_span.start,
+                    end: delimitter_span.end + symbol_span.end,
+                },
+            ]),
+            _ => Some(vec![delimitter_span]),
         };
     } else {
         Some(vec![delimitter_span])
@@ -366,14 +404,6 @@ fn get_value(element: AttributeGraphElements) -> Option<Value> {
 #[test]
 fn test_runmd() {
     let runmd = r#"
-``` demo process
-add test_val .text test hello world
-define test_val test .text test hello world
-``` println
-add label .text test label
-add duration .int2 5, 6
-```
-
 ``` test
 : test .symbol cool_symbol
 
@@ -382,36 +412,41 @@ add duration .int2 5, 6
 : .event test2
 : .exit
 ```
-
-"#;
+"#.trim();
 
     // Test lexer
     let mut lexer = Runmd::lexer(runmd);
     let token = lexer.next();
-    assert_eq!(
-        token,
-        Some(Runmd::BlockDelimitter(vec![(1..5), (5..9), (10..17)]))
-    );
-    let token = lexer.next();
-    assert_eq!(token, Some(Runmd::BlockKeyword(vec![(18..21), (21..31)])));
-    let _ = lexer.next();
-    let token = lexer.next();
-    assert_eq!(
-        token,
-        Some(Runmd::BlockKeyword(vec![(54..60), (61..70), (70..75)]))
-    );
-    let token = lexer.next();
-    if let Some(Runmd::AttributeValue((_, value_span))) = token.clone() {
-        eprintln!("{:?} {}", token, &lexer.source()[value_span]);
+   
+    match token {
+        Some(token) => match token {
+            Runmd::BlockDelimitter(spans) => {
+                for s in spans {
+                    eprint!("{}", &runmd[s]);
+                }
+            },
+            _ => {
+                panic!()
+            }
+        },
+        None => panic!(),
     }
+    eprintln!();
 
-    // Test graph creation w/ lexer
-    let runmd_parser = Runmd::default();
-    let tokens = runmd_parser.parse(runmd);
-    for (token, span) in tokens {
-        if let Some(span) = span {
-            eprintln!("{:?} {}", token, &runmd[span]);
-        }
+    let token = lexer.next();
+    match token {
+        Some(token) => match token {
+            Runmd::BlockKeyword(spans) => {
+                for s in spans {
+                    eprint!("{}", &runmd[s]);
+                }
+            },
+            _ => {
+                panic!()
+            }
+        },
+        None => panic!(),
     }
+    eprintln!();
 
 }

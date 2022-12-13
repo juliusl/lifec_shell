@@ -1,5 +1,5 @@
-use lifec::Component;
-use lifec::HashMapStorage;
+use lifec::prelude::Component;
+use lifec::prelude::HashMapStorage;
 use tracing::Level;
 use tracing::event;
 use std::io::Cursor;
@@ -10,8 +10,6 @@ use tokio::io::AsyncRead;
 #[derive(Component, Default)]
 #[storage(HashMapStorage)]
 pub struct CharDevice {
-    // /// Decodes terminal character sequences
-    // decoder: Decoder,
     /// The current buffer this device is writing to
     buffer: String,
     /// character counts per line
@@ -25,6 +23,12 @@ pub struct CharDevice {
 }
 
 impl CharDevice {
+    /// Sets the buffer,
+    /// 
+    pub fn set_buffer(&mut self, buffer: String) {
+        self.buffer = buffer;
+    }
+
     /// Returns a read_only cursor for the current state of the buffer
     ///
     /// Not meant for polling for changes, but to make it more convenient for reading the current state of the device
@@ -99,7 +103,7 @@ impl CharDevice {
             ref c if c.is_control() || c.is_ascii_control() => {
                 if *c == '\u{7f}' || *c == '\u{00008}' {
                     self.backspace();
-                } else if *c == '\r' {
+                } else if *c == '\r' || *c == '\n'  {
                     self.buffer.insert(self.cursor, *c);
                     self.cursor += 1 as usize;
                     self.line += 1;

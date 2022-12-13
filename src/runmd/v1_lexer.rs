@@ -1,16 +1,5 @@
-use lifec::Value;
+use lifec::prelude::Value;
 use logos::Logos;
-
-
-#[derive(Debug)]
-pub enum AttributeGraphErrors {
-    UnknownEvent,
-    NotEnoughArguments,
-    WrongArugment,
-    IncorrectMessageFormat,
-    CannotImportEmptyAttribute,
-    EmptyMessage,
-}
 
 #[derive(Logos, Debug, Hash, Clone, PartialEq, PartialOrd)]
 pub enum AttributeGraphEvents {
@@ -18,24 +7,8 @@ pub enum AttributeGraphEvents {
     /// Example: add test_attr .TEXT remaining text is text
     /// Adds a new attribute to the graph. Types omitted from this event are symbol, reference, and binary-vector
     #[token("add")]
+    #[token("+")]
     Add,
-    /// Usage: find_remove {`attribute-name`}
-    /// Example: find_remove test_attr
-    /// Finds and removes an attribute from the graph by attribute-name
-    #[token("find_remove")]
-    FindRemove,
-    /// Usage: import {`external entity id`} {`attribute-name`} {`value-type token`} {`remaining is parsed corresponding to value-type token`}
-    /// Example: import 10 test_attr .TEXT remaining text is text
-    /// Imports an attribute to the graph, Types omitted from this event are symbol, reference, and binary-vector
-    #[token("import")]
-    Import,
-    /// Usage: copy {`external entity id`} {`attribute-name`}
-    /// Examples: copy 10 test_attr
-    ///           copy 10
-    /// Copies imported attribute/s to the graph. Types omitted from this event are symbol, reference, and binary-vector
-    /// Implementation requires that attributes are imported to the graph before copy message is handled
-    #[token("copy")]
-    Copy,
     /// Usage: define {`attribute-name`} {`symbol-name`}
     /// Examples: define test_attr node
     /// Defines and adds a symbol for a specified attribute name
@@ -43,27 +16,8 @@ pub enum AttributeGraphEvents {
     /// The format of the name for the symbol attribute is {`attribute-name`}::{`symbol-name`}
     /// The value of the symbol will be {`symbol-name`}::
     #[token("define")]
+    #[token(":")]
     Define,
-    /// Usage: apply {`attribute-name`} {`symbol-name`}
-    /// Examples: apply test_attr node
-    /// If a symbol has been defined for attribute, and the symbol attribute has a transient value,
-    /// apply will override the value with the transient value. If the attribute doesn't already exist it is added.
-    /// For example if some symbol called node is defined for test_attr. Then an attribute will exist with the name test_attr:node.
-    /// If some system edits the value of test_attr::node, then a transient value will exist for test_attr::node.
-    /// Dispatching apply will take the transient value and write to test_attr.
-    #[token("apply")]
-    Apply,
-    /// Usage: edit {`attribute-name`} {`new-attribute-name`} {`new-value-type`} {`remaining as value`}
-    /// Examples: edit test_attr test_attr2 .TEXT editing the value of test_attr
-    /// Set's the transient value for an attribute. Types omitted from this event are symbol, reference, and binary-vector.
-    #[token("edit")]
-    Edit,
-    #[token("from")]
-    From,
-    #[token("to")]
-    To,
-    #[token("publish")]
-    Publish,
     /// Usage:   # Here is a helpful comment
     ///          - Here is another helpful comment
     ///         // Here is anothet helpful comment
@@ -162,7 +116,7 @@ pub enum AttributeGraphElements {
 mod graph_lexer {
     use std::str::FromStr;
 
-    use lifec::Value;
+    use lifec::prelude::Value;
     use logos::Lexer;
 
     use super::AttributeGraphElements;
